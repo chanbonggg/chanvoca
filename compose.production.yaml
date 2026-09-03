@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: chanvoca
+      POSTGRES_USER: chanvoca
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the server environment}
+    volumes:
+      - chanvoca_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chanvoca -d chanvoca"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: backend/.env
+    environment:
+      DATABASE_URL: postgres://chanvoca:${POSTGRES_PASSWORD}@postgres:5432/chanvoca
+      PORT: 4000
+    command: ["sh", "-c", "node dist/migrate.js && node dist/server.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: backend/.env
+    environment:
+      DATABASE_URL: postgres://chanvoca:${POSTGRES_PASSWORD}@postgres:5432/chanvoca
+    command: ["node", "dist/worker.js"]
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        BACKEND_INTERNAL_URL: http://backend:4000
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  chanvoca_postgres:
+
