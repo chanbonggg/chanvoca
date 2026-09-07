@@ -36,15 +36,17 @@ export function parseVocabularyFile(filename: string, content: Buffer): Vocabula
   const firstSheet = workbook.Sheets[workbook.SheetNames[0] ?? ""];
   if (!firstSheet) return failure("EMPTY_FILE", "읽을 수 있는 시트가 없습니다.");
 
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(firstSheet, { header: 1, blankrows: true, defval: "", raw: false });
-  const dataRows = rows.slice(1);
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(firstSheet, { header: 1, blankrows: true, defval: "", raw: false })
+    .map((row, index) => removeMergedPlaceholders(row, index, firstSheet["!merges"]));
+  const hasHeader = isHeaderRow(rows[0] ?? []);
+  const dataRows = rows.slice(hasHeader ? 1 : 0);
   if (dataRows.length > maxRows) return failure("TOO_MANY_ROWS", `데이터 행은 최대 ${maxRows.toLocaleString("ko-KR")}개까지 업로드할 수 있습니다.`);
 
   const cards: VocabularyCardInput[] = [];
   const invalidRows: number[] = [];
 
   dataRows.forEach((row, index) => {
-    const sourceRow = index + 2;
+    const sourceRow = index + (hasHeader ? 2 : 1);
     const term = cellText(row[0]);
     const meaning = cellText(row[1]);
 
@@ -59,7 +61,7 @@ export function parseVocabularyFile(filename: string, content: Buffer): Vocabula
   if (invalidRows.length > 0) {
     return failure("INVALID_ROWS", "단어와 뜻을 모두 입력해야 하며 길이 제한을 지켜야 합니다.", invalidRows.slice(0, 20));
   }
-  if (cards.length === 0) return failure("EMPTY_FILE", "헤더 아래에 저장할 단어가 없습니다.");
+  if (cards.length === 0) return failure("EMPTY_FILE", "저장할 단어가 없습니다.");
 
   return { ok: true, sourceFormat, cards };
 }
@@ -71,6 +73,22 @@ function formatFromFilename(filename: string) {
 
 function cellText(value: unknown) {
   return typeof value === "string" ? value.trim() : String(value ?? "").trim();
+}
+
+function removeMergedPlaceholders(row: unknown[], rowIndex: number, merges: XLSX.Range[] | undefined) {
+  const placeholderColumns = new Set<number>();
+  for (const merge of merges ?? []) {
+    if (merge.s.r <= rowIndex && rowIndex <= merge.e.r) {
+      for (let column = merge.s.c + 1; column <= merge.e.c; column += 1) placeholderColumns.add(column);
+    }
+  }
+  return row.filter((_, column) => !placeholderColumns.has(column));
+}
+
+function isHeaderRow(row: unknown[]) {
+  const [term, meaning] = row.map(cellText);
+  return ["word", "term", "english", "english word", "단어", "영단어"].includes(term.toLowerCase())
+    && ["meaning", "definition", "뜻", "의미", "해석"].includes(meaning.toLowerCase());
 }
 
 function hasExpectedSignature(format: "xlsx" | "xls", content: Buffer) {

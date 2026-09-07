@@ -30,6 +30,27 @@ test("parses the first worksheet of an xlsx file", () => {
   });
 });
 
+test("parses horizontally merged word and meaning columns without a header", () => {
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([["resume", "", "이력서", ""], ["vacancy", "", "공석", ""]]);
+  sheet["!merges"] = [
+    XLSX.utils.decode_range("A1:B1"), XLSX.utils.decode_range("C1:D1"),
+    XLSX.utils.decode_range("A2:B2"), XLSX.utils.decode_range("C2:D2"),
+  ];
+  XLSX.utils.book_append_sheet(workbook, sheet, "Words");
+
+  const result = parseVocabularyFile("merged.xlsx", XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }));
+
+  assert.deepEqual(result, {
+    ok: true,
+    sourceFormat: "xlsx",
+    cards: [
+      { sourceRow: 1, term: "resume", meaning: "이력서" },
+      { sourceRow: 2, term: "vacancy", meaning: "공석" },
+    ],
+  });
+});
+
 test("parses an xls file", () => {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["word", "meaning"], ["adapt", "적응하다"]]), "Words");
