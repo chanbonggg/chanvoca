@@ -57,11 +57,15 @@ test("handled readiness failures and application rejections are logged", async (
 
 test("driver error properties and messages never leak into diagnostics", () => {
   const err = Object.assign(new Error("secret-message", { cause: new Error("secret-cause") }), {
-    code: "23505", detail: "secret-detail", query: "secret-query", parameters: ["secret-param"], endpoint: "secret-endpoint",
+    code: "23514", detail: "secret-detail", query: "secret-query", parameters: ["secret-param"], endpoint: "secret-endpoint",
+    schema_name: "public", table_name: "cards", column_name: "source_row", constraint_name: "cards_source_row_check",
   });
   const serialized = serializeError(err);
   assert.ok("code" in serialized && "stack" in serialized);
-  assert.equal(serialized.code, "23505");
+  assert.equal(serialized.code, "23514");
+  assert.equal(serialized.table, "cards");
+  assert.equal(serialized.column, "source_row");
+  assert.equal(serialized.constraint, "cards_source_row_check");
   assert.match(serialized.stack!, /logger.test.ts/);
   assert.doesNotMatch(JSON.stringify(serialized), /secret-/);
 });

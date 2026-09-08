@@ -14,6 +14,8 @@ FROM node:24-alpine
 
 WORKDIR /app
 ENV NODE_ENV=production
+ENV NODE_OPTIONS=--enable-source-maps
+ENV BACKEND_INTERNAL_URL=http://backend:4000
 COPY package.json package-lock.json ./
 COPY backend/package.json backend/package.json
 COPY frontend/package.json frontend/package.json
@@ -24,4 +26,3 @@ COPY --from=build /app/frontend/next.config.ts frontend/next.config.ts
 WORKDIR /app/frontend
 EXPOSE 3000
 CMD ["node", "/app/node_modules/next/dist/bin/next", "start"]
-

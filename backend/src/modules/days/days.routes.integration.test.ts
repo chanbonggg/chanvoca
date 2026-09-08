@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as XLSX from "xlsx";
 
 import { buildApp } from "../../app.js";
 import { createDatabase } from "../../shared/db.js";
@@ -143,12 +144,41 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
   }
 });
 
-function multipartRequest(filename: string, csv: string) {
+test("imports headerless xlsx row 1 and keeps existing rows and positive-row validation", { skip: !databaseUrl, timeout: 20_000 }, async () => {
+  const sql = createDatabase(databaseUrl);
+  await applyMigrations(sql);
+  await applyMigrations(sql); // Already-applied migrations must be safe to run again.
+  await sql.unsafe("TRUNCATE jobs, users CASCADE");
+  const app = buildApp(sql);
+  try {
+    const original = await app.inject(multipartRequest("header.csv", "word,meaning\nsteady,꾸준한\n"));
+    assert.equal(original.statusCode, 201);
+    const originalId = original.json().day.id as string;
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["resume", "이력서"], ["vacancy", "공석"]]), "Words");
+    const uploaded = await app.inject(multipartRequest("headerless.xlsx", XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })));
+    assert.equal(uploaded.statusCode, 201);
+    const dayId = uploaded.json().day.id as string;
+    const cards = await sql<{ source_row: number; term: string }[]>`SELECT source_row, term FROM cards WHERE day_id = ${dayId} ORDER BY source_row`;
+    assert.deepEqual(Array.from(cards), [{ source_row: 1, term: "resume" }, { source_row: 2, term: "vacancy" }]);
+    const originalCards = await sql<{ source_row: number }[]>`SELECT source_row FROM cards WHERE day_id = ${originalId}`;
+    assert.equal(originalCards[0]!.source_row, 2);
+    const jobs = await sql<{ count: string }[]>`SELECT count(*) FROM jobs WHERE status = 'queued'`;
+    assert.equal(Number(jobs[0]!.count), 3);
+    await assert.rejects(sql`UPDATE cards SET source_row = 0 WHERE day_id = ${originalId}`, { code: "23514", constraint_name: "cards_source_row_check" });
+  } finally { await app.close(); }
+});
+
+function multipartRequest(filename: string, content: string | Buffer) {
   const boundary = "chanvoca-test-boundary";
   return {
     method: "POST" as const,
     url: "/api/days/upload",
     headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
-    payload: Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: text/csv\r\n\r\n${csv}\r\n--${boundary}--\r\n`),
+    payload: Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+      Buffer.isBuffer(content) ? content : Buffer.from(content),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
   };
 }

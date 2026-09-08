@@ -4,11 +4,18 @@ import { pino, type DestinationStream } from "pino";
 // Only allow diagnostic metadata. Driver errors can contain SQL values and push keys.
 export function serializeError(error: unknown) {
   if (!(error instanceof Error)) return { type: typeof error, message: "Non-Error thrown" };
-  const metadata = error as Error & { code?: string; statusCode?: number; cause?: unknown };
+  const metadata = error as Error & {
+    code?: string; statusCode?: number; cause?: unknown;
+    schema_name?: string; table_name?: string; column_name?: string; constraint_name?: string;
+  };
   return {
     type: error.name,
     code: metadata.code,
     statusCode: metadata.statusCode,
+    schema: metadata.schema_name,
+    table: metadata.table_name,
+    column: metadata.column_name,
+    constraint: metadata.constraint_name,
     // Stack frames retain source file/line without the potentially sensitive message.
     stack: error.stack?.split("\n").filter((line) => /^\s+at /.test(line)).join("\n"),
     ...(metadata.cause instanceof Error ? { cause: {

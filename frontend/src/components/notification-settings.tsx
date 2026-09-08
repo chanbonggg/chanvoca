@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { api, messageFrom } from "@/lib/api";
+import { clientLog, reportError } from "@/lib/client-log";
 
 type Settings = {
   enabled: boolean;
@@ -30,7 +31,7 @@ export function NotificationSettings() {
           setSettings(data);
           setLocalTime(data.localTime ?? "");
         })
-        .catch((error) => setMessage(messageFrom(error)));
+        .catch((error) => { reportError("notifications.load_failed", error); setMessage(messageFrom(error)); });
     }, 0);
     return () => window.clearTimeout(initId);
   }, []);
@@ -42,23 +43,29 @@ export function NotificationSettings() {
     setMessage("");
     try {
       const { publicKey } = await api<PushConfig>("/api/push/config");
+      clientLog("info", "notifications.permission_requested");
       const permission = await Notification.requestPermission();
+      clientLog(permission === "granted" ? "info" : "warn", "notifications.permission_result", { permission });
       if (permission !== "granted") {
         setMessage(permission === "denied" ? "브라우저 설정에서 알림 권한을 허용해 주세요." : "알림 권한이 허용되지 않았습니다.");
         return;
       }
 
+      clientLog("info", "notifications.worker_wait_started");
       const registration = await navigator.serviceWorker.ready;
+      clientLog("info", "notifications.worker_ready");
       const subscription = await registration.pushManager.getSubscription() ?? await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: base64UrlToUint8Array(publicKey),
       });
+      clientLog("info", "notifications.browser_subscribed");
       await api("/api/push/subscriptions", { method: "POST", body: JSON.stringify(subscription.toJSON()) });
       const next = await api<Settings>("/api/notification-settings");
       setSettings(next);
       setLocalTime(next.localTime ?? localTime);
       setMessage("이 기기에 알림 권한이 연결되었습니다.");
     } catch (error) {
+      reportError("notifications.subscribe_failed", error);
       setMessage(messageFrom(error));
     } finally {
       setBusy(false);
@@ -78,9 +85,11 @@ export function NotificationSettings() {
         method: "PUT",
         body: JSON.stringify({ enabled, localTime, timezone: settings.timezone }),
       });
+      clientLog("info", "notifications.settings_saved");
       setSettings({ ...settings, ...next });
       setMessage(enabled ? "매일 학습 알림을 켰습니다." : "매일 학습 알림을 껐습니다.");
     } catch (error) {
+      reportError("notifications.save_failed", error);
       setMessage(messageFrom(error));
     } finally {
       setBusy(false);
@@ -92,8 +101,10 @@ export function NotificationSettings() {
     setMessage("");
     try {
       await api("/api/push/test", { method: "POST" });
+      clientLog("info", "notifications.test_queued");
       setMessage("테스트 알림을 작업 큐에 넣었습니다.");
     } catch (error) {
+      reportError("notifications.test_failed", error);
       setMessage(messageFrom(error));
     } finally {
       setBusy(false);

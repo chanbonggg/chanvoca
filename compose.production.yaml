@@ -47,6 +47,9 @@ services:
         condition: service_healthy
 
   frontend:
+    environment:
+      BACKEND_INTERNAL_URL: http://backend:4000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -61,4 +64,3 @@ services:
 
 volumes:
   chanvoca_postgres:
-

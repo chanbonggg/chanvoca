@@ -1,17 +1,5 @@
 import type { NextConfig } from "next";
 
-const backendUrl = process.env.BACKEND_INTERNAL_URL ?? "http://localhost:4000";
-
-const nextConfig: NextConfig = {
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${backendUrl}/api/:path*`,
-      },
-    ];
-  },
-};
-
+// API forwarding lives in app/api/[...path] so upstream failures are observable.
+const nextConfig: NextConfig = { experimental: { serverSourceMaps: true } };
 export default nextConfig;
-

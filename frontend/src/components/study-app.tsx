@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { NotificationSettings } from "@/components/notification-settings";
 import { api, messageFrom } from "@/lib/api";
+import { clientLog, reportError } from "@/lib/client-log";
 
 type ExampleStatus = "pending" | "processing" | "ready" | "failed";
 type Result = "known" | "unknown" | "timeout";
@@ -75,6 +76,7 @@ export function StudyApp() {
   const currentCard = cards[cardIndex] ?? null;
 
   const applySession = useCallback((data: SessionResponse) => {
+    clientLog("info", "study.session_applied", { sessionId: data.session.id, roundNumber: data.roundNumber, count: data.cards.length });
     setSession(data.session);
     setRoundNumber(data.roundNumber);
     setCards(data.cards);
@@ -89,6 +91,7 @@ export function StudyApp() {
       method: "POST",
     });
 
+    clientLog("info", "study.round_advanced", { sessionId, roundNumber: data.roundNumber });
     if (data.completed) {
       setSession(data.session);
       setCards([]);
@@ -101,6 +104,7 @@ export function StudyApp() {
   }, [applySession]);
 
   const loadSession = useCallback(async (sessionId: string) => {
+    clientLog("info", "study.resume_started", { sessionId });
     const data = await api<SessionResponse>(`/api/study/sessions/${sessionId}`);
 
     if (data.session.status === "completed") {
@@ -129,6 +133,7 @@ export function StudyApp() {
       window.localStorage.setItem(activeSessionKey, data.session.id);
       setPhase("studying");
     } catch (error) {
+      reportError("study.start_failed", error, { stage: "study.start" });
       setErrorMessage(messageFrom(error));
       setPhase("error");
     }
@@ -140,6 +145,7 @@ export function StudyApp() {
 
     try {
       const data = await api<{ days: Day[] }>("/api/days");
+      clientLog("info", "study.days_loaded", { count: data.days.length });
       setDays(data.days);
 
       if (data.days.length === 0) {
@@ -154,13 +160,15 @@ export function StudyApp() {
         try {
           await loadSession(savedSessionId);
           return;
-        } catch {
+        } catch (error) {
+          reportError("study.resume_failed", error, { sessionId: savedSessionId });
           window.localStorage.removeItem(activeSessionKey);
         }
       }
 
       await startSession(data.days[0]!.id);
     } catch (error) {
+      reportError("study.load_failed", error, { stage: "study.load" });
       setErrorMessage(messageFrom(error));
       setPhase("error");
     }
@@ -186,6 +194,16 @@ export function StudyApp() {
         }),
       });
 
+      setSession((current) => {
+        if (!current || current.id !== session.id) return current;
+        return {
+          ...current,
+          knownCount: current.knownCount + (result === "known" ? 1 : 0),
+          unknownCount: current.unknownCount + (result === "unknown" ? 1 : 0),
+          timeoutCount: current.timeoutCount + (result === "timeout" ? 1 : 0),
+        };
+      });
+      clientLog("info", "study.attempt_saved", { sessionId: session.id, cardId: currentCard.id, roundNumber });
       if (cardIndex + 1 < cards.length) {
         setCardIndex((value) => value + 1);
         setRevealed(false);
@@ -195,6 +213,7 @@ export function StudyApp() {
         await advanceRound(session.id);
       }
     } catch (error) {
+      reportError("study.attempt_failed", error, { stage: "study.attempt" });
       setErrorMessage(messageFrom(error));
       setPhase("error");
     } finally {
@@ -242,6 +261,7 @@ export function StudyApp() {
     startedAtRef.current = startedAt;
     revealedAtRef.current = null;
     const expire = () => {
+      clientLog("debug", "study.card_timeout", { cardId: currentCard.id });
       setRemainingSeconds(0);
       setTimedOut(true);
       setRevealed(true);
@@ -272,6 +292,7 @@ export function StudyApp() {
 
   const reveal = () => {
     if (!currentCard || revealed || timedOut || saving) return;
+    clientLog("debug", "study.card_revealed", { cardId: currentCard.id });
     revealedAtRef.current = Math.max(0, Math.round(performance.now() - startedAtRef.current));
     setRevealed(true);
   };
@@ -284,25 +305,22 @@ export function StudyApp() {
   const uploadFile = async (file: File | undefined) => {
     if (!file || uploading) return;
 
+    clientLog("info", "upload.started", { bytes: file.size, format: ["xlsx", "xls", "csv"].find((format) => file.name.toLowerCase().endsWith(`.${format}`)) ?? "unsupported" });
     setUploading(true);
     setUploadMessage("");
     try {
       const formData = new FormData();
       formData.set("file", file);
-      const response = await fetch("/api/days/upload", { method: "POST", body: formData });
-      const data = await response.json().catch(() => null) as { day?: Day; error?: { message?: string; rows?: number[] } };
-
-      if (!response.ok) {
-        const rowText = data?.error?.rows?.length ? ` (오류 행: ${data.error.rows.join(", ")})` : "";
-        throw new Error(`${data?.error?.message ?? "업로드에 실패했습니다."}${rowText}`);
-      }
+      const data = await api<{ day?: Day }>("/api/days/upload", { method: "POST", body: formData });
       if (!data.day) throw new Error("새 Day 정보를 받지 못했습니다.");
 
+      clientLog("info", "upload.completed", { dayId: data.day.id, rowCount: data.day.rowCount });
       setDays((current) => [data.day!, ...current]);
       window.localStorage.removeItem(activeSessionKey);
       setMenuOpen(false);
       await startSession(data.day.id);
     } catch (error) {
+      reportError("upload.failed", error, { stage: "upload.failed" });
       setUploadMessage(messageFrom(error));
     } finally {
       setUploading(false);
@@ -362,7 +380,7 @@ export function StudyApp() {
             <div className="menu-title-row"><h3>Day 선택</h3><span>{days.length}개</span></div>
             {days.length === 0 ? <p className="empty-note">업로드된 Day가 없습니다.</p> : <div className="day-list">{days.map((day) => <button className={`day-item ${day.id === session?.targetDayId ? "is-active" : ""}`} type="button" key={day.id} onClick={() => void selectDay(day.id)}><span><strong>Day {day.dayNumber}</strong><small>{day.rowCount}개 단어</small></span><small>{day.examples.ready}/{day.rowCount} 예문</small></button>)}</div>}
           </section>
-          <section className="menu-section"><h3>단어 가져오기</h3><label className={`upload-control ${uploading ? "is-uploading" : ""}`}><span>{uploading ? "업로드 중…" : "엑셀 또는 CSV 선택"}</span><small>.xlsx, .xls, .csv</small><input type="file" accept=".xlsx,.xls,.csv" disabled={uploading} onChange={(event) => { void uploadFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><p className="helper-text">첫 행은 헤더입니다. 빈 행은 건너뛰지만 단어 또는 뜻이 비어 있으면 파일 전체가 저장되지 않고 오류 행을 알려드립니다. CSV는 UTF-8만 지원합니다.</p>{uploadMessage && <p className="upload-message" role="alert">{uploadMessage}</p>}</section>
+          <section className="menu-section"><h3>단어 가져오기</h3><label className={`upload-control ${uploading ? "is-uploading" : ""}`}><span>{uploading ? "업로드 중…" : "엑셀 또는 CSV 선택"}</span><small>.xlsx, .xls, .csv</small><input type="file" accept=".xlsx,.xls,.csv" disabled={uploading} onChange={(event) => { void uploadFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><p className="helper-text">헤더가 있으면 첫 행의 word/meaning 또는 단어/뜻을 인식해 제외합니다. 헤더 없이 첫 행부터 단어를 입력해도 됩니다. 빈 행은 건너뛰지만 단어 또는 뜻이 비어 있으면 파일 전체가 저장되지 않고 오류 행을 알려드립니다. CSV는 UTF-8만 지원합니다.</p>{uploadMessage && <p className="upload-message" role="alert">{uploadMessage}</p>}</section>
           <NotificationSettings />
         </aside>
       </div>}
