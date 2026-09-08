@@ -1,3 +1,4 @@
+import { setStage, currentLog, logContext } from "../../shared/logger.js";
 import webpush from "web-push";
 
 import type { Database } from "../../shared/db.js";
@@ -25,8 +26,12 @@ export class PushError extends Error {
 
 export async function processPushJob(sql: Database, payload: unknown) {
   const job = parsePushPayload(payload);
-  if (!job) return { completed: true } as const;
+  if (!job) {
+    currentLog().warn({ event: "push.skipped", reason: "invalid_payload" }, "Push job skipped");
+    return { completed: true } as const;
+  }
 
+  setStage("push.load_subscription");
   const subscriptions = await sql<PushSubscriptionRow[]>`
     SELECT id, endpoint, p256dh, auth
     FROM push_subscriptions
@@ -34,14 +39,22 @@ export async function processPushJob(sql: Database, payload: unknown) {
       AND disabled_at IS NULL
   `;
   const subscription = subscriptions[0];
-  if (!subscription) return { completed: true } as const;
+  if (!subscription) {
+    currentLog().info({ event: "push.skipped", subscriptionId: job.subscriptionId, reason: "missing_or_disabled" }, "Push job skipped");
+    return { completed: true } as const;
+  }
 
   try {
+    setStage("push.configure_vapid");
     configureVapid();
+    setStage("push.send");
+    const started = performance.now();
     await webpush.sendNotification({
       endpoint: subscription.endpoint,
       keys: { p256dh: subscription.p256dh, auth: subscription.auth },
     }, JSON.stringify({ title: job.title, body: job.body, url: job.url }));
+    currentLog().info({ event: "push.sent", subscriptionId: subscription.id, durationMs: performance.now() - started }, "Push provider accepted notification");
+    setStage("push.save_success");
     await sql`
       UPDATE push_subscriptions
       SET last_success_at = now()
@@ -50,19 +63,23 @@ export async function processPushJob(sql: Database, payload: unknown) {
     return { completed: true } as const;
   } catch (error) {
     const statusCode = statusCodeFrom(error);
-    const failure = new PushError(
+    const failure = error instanceof PushError ? error : new PushError(
       statusCode ? `PUSH_HTTP_${statusCode}` : "PUSH_NETWORK",
       statusCode !== 404 && statusCode !== 410 && statusCode !== 401 && statusCode !== 403,
       statusCode === 404 || statusCode === 410,
     );
+    currentLog().warn({ event: "push.failed", subscriptionId: subscription.id, stage: logContext.getStore()?.stage, err: error, errorCode: failure.code, retryable: failure.retryable, statusCode }, "Push processing failed");
     if (failure.disableSubscription) {
+      setStage("push.disable_expired_subscription");
       await sql`UPDATE push_subscriptions SET disabled_at = now() WHERE id = ${subscription.id}`;
+      currentLog().warn({ event: "push.subscription_disabled", subscriptionId: subscription.id }, "Expired push subscription disabled");
     }
     return { completed: false, error: failure } as const;
   }
 }
 
 export async function scheduleNotifications(sql: Database, now = new Date()) {
+  setStage("notifications.load_enabled_settings");
   const settings = await sql<{ user_id: string; local_time: string; timezone: string }[]>`
     SELECT user_id, local_time::text, timezone
     FROM notification_settings
@@ -74,7 +91,9 @@ export async function scheduleNotifications(sql: Database, now = new Date()) {
     const configuredTime = setting.local_time.slice(0, 5);
     if (local.time !== configuredTime) continue;
 
-    await sql.begin(async (transaction) => {
+    setStage("notifications.schedule_transaction");
+    const queued = await sql.begin(async (transaction) => {
+      setStage("notifications.claim_local_date");
       const claimed = await transaction<{ user_id: string }[]>`
         UPDATE notification_settings
         SET last_enqueued_local_date = ${local.date}, updated_at = now()
@@ -82,8 +101,9 @@ export async function scheduleNotifications(sql: Database, now = new Date()) {
           AND (last_enqueued_local_date IS NULL OR last_enqueued_local_date <> ${local.date}::date)
         RETURNING user_id
       `;
-      if (!claimed[0]) return;
+      if (!claimed[0]) return null;
 
+      setStage("notifications.load_subscriptions");
       const subscriptions = await transaction<{ id: string }[]>`
         SELECT id
         FROM push_subscriptions
@@ -96,7 +116,9 @@ export async function scheduleNotifications(sql: Database, now = new Date()) {
         body: "오늘 계획을 열어 학습을 시작하세요.",
         url: "/?source=notification",
       })));
+      return subscriptions.length;
     });
+    if (queued !== null) currentLog().info({ event: "notifications.scheduled", subscriptionCount: queued, localDate: local.date }, "Daily notification transaction committed");
   }
 }
 

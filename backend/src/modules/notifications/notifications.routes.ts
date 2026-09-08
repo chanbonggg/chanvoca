@@ -1,3 +1,4 @@
+import { setStage } from "../../shared/logger.js";
 import type { FastifyInstance } from "fastify";
 
 import type { Database } from "../../shared/db.js";
@@ -36,6 +37,7 @@ export async function registerNotificationRoutes(app: FastifyInstance, sql: Data
     }
 
     const ownerId = await getOwnerId(sql);
+    setStage("push.save_subscription");
     await sql`
       INSERT INTO push_subscriptions ${sql({
         user_id: ownerId,
@@ -52,6 +54,7 @@ export async function registerNotificationRoutes(app: FastifyInstance, sql: Data
         disabled_at = NULL
     `;
 
+    request.log.info({ event: "push.subscribed" }, "Push subscription saved");
     return reply.code(201).send({ subscribed: true });
   });
 
@@ -61,22 +64,26 @@ export async function registerNotificationRoutes(app: FastifyInstance, sql: Data
     }
 
     const ownerId = await getOwnerId(sql);
+    setStage("push.disable_subscription");
     await sql`
       UPDATE push_subscriptions
       SET disabled_at = now()
       WHERE endpoint = ${request.body.endpoint}
         AND user_id = ${ownerId}
     `;
+    request.log.info({ event: "push.unsubscribed" }, "Push subscription disabled");
     return reply.code(204).send();
   });
 
   app.get("/notification-settings", async () => {
     const ownerId = await getOwnerId(sql);
+    setStage("notifications.load_settings");
     const settings = await sql<SettingsRow[]>`
       SELECT enabled, local_time::text, timezone
       FROM notification_settings
       WHERE user_id = ${ownerId}
     `;
+    setStage("push.count_active_subscriptions");
     const activeSubscriptions = await sql<{ count: string }[]>`
       SELECT count(*)
       FROM push_subscriptions
@@ -101,6 +108,7 @@ export async function registerNotificationRoutes(app: FastifyInstance, sql: Data
 
     const ownerId = await getOwnerId(sql);
     if (body.enabled) {
+      setStage("push.check_active_subscriptions");
       const subscriptions = await sql<{ count: string }[]>`
         SELECT count(*)
         FROM push_subscriptions
@@ -112,6 +120,7 @@ export async function registerNotificationRoutes(app: FastifyInstance, sql: Data
       }
     }
 
+    setStage("notifications.save_settings");
     await sql`
       INSERT INTO notification_settings ${sql({
         user_id: ownerId,
@@ -125,11 +134,13 @@ export async function registerNotificationRoutes(app: FastifyInstance, sql: Data
         timezone = EXCLUDED.timezone,
         updated_at = now()
     `;
+    request.log.info({ event: "notifications.settings_saved", enabled: body.enabled }, "Notification settings saved");
     return { enabled: body.enabled, localTime: body.localTime, timezone: body.timezone };
   });
 
   app.post("/push/test", async (_request, reply) => {
     const ownerId = await getOwnerId(sql);
+    setStage("push.load_test_subscriptions");
     const subscriptions = await sql<{ id: string }[]>`
       SELECT id
       FROM push_subscriptions
@@ -149,6 +160,7 @@ export async function registerNotificationRoutes(app: FastifyInstance, sql: Data
       url: "/?source=notification",
     })));
 
+    _request.log.info({ event: "push.test_queued", subscriptionCount: subscriptions.length }, "Test push enqueue requests completed");
     return reply.code(202).send({ queued: subscriptions.length });
   });
 }

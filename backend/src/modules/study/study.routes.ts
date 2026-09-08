@@ -1,3 +1,4 @@
+import { setStage } from "../../shared/logger.js";
 import type { FastifyInstance } from "fastify";
 
 import type { Database, Queryable } from "../../shared/db.js";
@@ -64,6 +65,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
       return reply.code(400).send(error("TARGET_AND_REPEAT_CONFLICT", "Day 선택과 전체 반복은 함께 사용할 수 없습니다."));
     }
 
+    setStage("study.create_transaction");
     const result = await sql.begin(async (transaction) => {
       const ownerId = await getOwnerId(transaction);
       const target = await findTargetDay(transaction, ownerId, body);
@@ -71,6 +73,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
       if (!target) return null;
 
       const planNumbers = reviewDayNumbers(target.day_number);
+      setStage("study.load_plan_days");
       const planDays = await transaction<DayRow[]>`
         SELECT id, day_number
         FROM days
@@ -78,6 +81,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
           AND day_number = ANY(${planNumbers})
         ORDER BY day_number DESC
       `;
+      setStage("study.load_plan_cards");
       const cards = await transaction<CardRow[]>`
         SELECT cards.id, days.day_number, cards.term, cards.meaning, cards.example_en, cards.example_ko, cards.example_status
         FROM cards
@@ -87,6 +91,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
 
       if (cards.length === 0) return null;
 
+      setStage("study.insert_session");
       const sessionRows = await transaction<SessionRow[]>`
         INSERT INTO study_sessions ${transaction({
           user_id: ownerId,
@@ -102,6 +107,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
       const session = sessionRows[0]!;
       const firstRound = shuffled(cards);
 
+      setStage("study.insert_session_cards");
       await transaction`
         INSERT INTO study_session_cards ${transaction(
           firstRound.map((card, index) => ({
@@ -122,6 +128,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
       return reply.code(404).send(error("DAY_NOT_FOUND", "학습할 Day 또는 카드가 없습니다."));
     }
 
+    request.log.info({ event: "study.created", sessionId: result.session.id, dayId: result.session.target_day_id, cardCount: result.cards.length }, "Study session created");
     return reply.code(201).send({
       session: sessionPayload(result.session),
       roundNumber: 1,
@@ -156,6 +163,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
       }
       const attempt = body;
 
+      setStage("study.attempt_transaction");
       const result = await sql.begin(async (transaction) => {
         const ownerId = await getOwnerId(transaction);
         const session = await sessionForOwner(transaction, request.params.sessionId, ownerId);
@@ -163,6 +171,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
         if (!session || session.status !== "in_progress") return null;
         if (attempt.roundNumber !== session.rounds_completed + 1) return "round-mismatch" as const;
 
+        setStage("study.check_duplicate_attempt");
         const existing = await transaction<AttemptRow[]>`
           SELECT card_id, result
           FROM study_attempts
@@ -171,6 +180,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
         `;
         if (existing[0]) return "duplicate" as const;
 
+        setStage("study.check_active_card");
         const active = await transaction<{ card_id: string }[]>`
           SELECT card_id
           FROM study_session_cards
@@ -180,6 +190,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
         `;
         if (!active[0]) return "card-mismatch" as const;
 
+        setStage("study.insert_attempt");
         await transaction`
           INSERT INTO study_attempts ${transaction({
             session_id: session.id,
@@ -194,24 +205,28 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
         `;
 
         if (attempt.result === "known") {
+          setStage("study.mark_card_passed");
           await transaction`
             UPDATE study_session_cards
             SET passed_at_round = ${attempt.roundNumber}
             WHERE session_id = ${session.id}
             AND card_id = ${attempt.cardId}
           `;
+          setStage("study.increment_known");
           await transaction`
             UPDATE study_sessions
             SET known_count = known_count + 1
             WHERE id = ${session.id}
           `;
         } else if (attempt.result === "unknown") {
+          setStage("study.increment_unknown");
           await transaction`
             UPDATE study_sessions
             SET unknown_count = unknown_count + 1
             WHERE id = ${session.id}
           `;
         } else {
+          setStage("study.increment_timeout");
           await transaction`
             UPDATE study_sessions
             SET timeout_count = timeout_count + 1
@@ -222,6 +237,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
         return "accepted" as const;
       });
 
+      request.log.info({ event: "study.attempt", sessionId: request.params.sessionId, cardId: attempt.cardId, roundNumber: attempt.roundNumber, outcome: result }, "Study attempt processed");
       if (result === "accepted" || result === "duplicate") return { accepted: true };
       if (result === "round-mismatch") return reply.code(409).send(error("ROUND_MISMATCH", "현재 라운드와 맞지 않는 결과입니다."));
       if (result === "card-mismatch") return reply.code(409).send(error("CARD_MISMATCH", "현재 학습 대상 카드가 아닙니다."));
@@ -231,6 +247,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
   );
 
   app.post<{ Params: { sessionId: string } }>("/sessions/:sessionId/rounds", async (request, reply) => {
+    setStage("study.round_transaction");
     const result = await sql.begin(async (transaction) => {
       const ownerId = await getOwnerId(transaction);
       const session = await sessionForOwner(transaction, request.params.sessionId, ownerId);
@@ -238,12 +255,14 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
       if (!session || session.status !== "in_progress") return null;
 
       const roundNumber = session.rounds_completed + 1;
+      setStage("study.count_expected_attempts");
       const expected = await transaction<{ count: string }[]>`
         SELECT count(*)
         FROM study_session_cards
         WHERE session_id = ${session.id}
           AND (passed_at_round IS NULL OR passed_at_round = ${roundNumber})
       `;
+      setStage("study.count_recorded_attempts");
       const recorded = await transaction<{ count: string }[]>`
         SELECT count(DISTINCT card_id)
         FROM study_attempts
@@ -253,6 +272,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
 
       if (Number(expected[0]!.count) !== Number(recorded[0]!.count)) return "incomplete" as const;
 
+      setStage("study.load_remaining_cards");
       const remaining = await transaction<CardRow[]>`
         SELECT cards.id, days.day_number, cards.term, cards.meaning, cards.example_en, cards.example_ko, cards.example_status
         FROM study_session_cards
@@ -263,6 +283,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
       `;
 
       if (remaining.length === 0) {
+        setStage("study.complete_session");
         const completed = await transaction<SessionRow[]>`
           UPDATE study_sessions
           SET status = 'completed', rounds_completed = ${roundNumber}, completed_at = now()
@@ -273,6 +294,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
         return { completed: true, session: completed[0]!, cards: [] as CardRow[] };
       }
 
+      setStage("study.advance_round");
       const advanced = await transaction<SessionRow[]>`
         UPDATE study_sessions
         SET rounds_completed = ${roundNumber}
@@ -286,6 +308,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
     if (result === "incomplete") return reply.code(409).send(error("ROUND_INCOMPLETE", "현재 라운드의 모든 카드 결과를 먼저 저장하세요."));
     if (!result) return reply.code(404).send(error("SESSION_NOT_FOUND", "진행 중인 학습 세션을 찾을 수 없습니다."));
 
+    request.log.info({ event: "study.round_completed", sessionId: result.session.id, completed: result.completed, roundNumber: result.session.rounds_completed, remainingCards: result.cards.length }, "Study round committed");
     return {
       completed: result.completed,
       session: sessionPayload(result.session),
@@ -297,6 +320,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
 
 async function findTargetDay(sql: Queryable, ownerId: string, body: CreateSessionBody) {
   if (body.repeatOfSessionId) {
+    setStage("study.find_repeat_day");
     const repeated = await sql<DayRow[]>`
       SELECT days.id, days.day_number
       FROM study_sessions
@@ -309,6 +333,7 @@ async function findTargetDay(sql: Queryable, ownerId: string, body: CreateSessio
   }
 
   if (body.targetDayId) {
+    setStage("study.find_selected_day");
     const selected = await sql<DayRow[]>`
       SELECT id, day_number
       FROM days
@@ -318,6 +343,7 @@ async function findTargetDay(sql: Queryable, ownerId: string, body: CreateSessio
     return selected[0];
   }
 
+  setStage("study.find_latest_day");
   const latest = await sql<DayRow[]>`
     SELECT id, day_number
     FROM days
@@ -329,6 +355,7 @@ async function findTargetDay(sql: Queryable, ownerId: string, body: CreateSessio
 }
 
 async function sessionForOwner(sql: Queryable, sessionId: string, ownerId: string) {
+  setStage("study.find_session");
   const sessions = await sql<SessionRow[]>`
     SELECT id, target_day_id, target_day_number, plan_day_numbers, status,
       total_cards, known_count, unknown_count, timeout_count, rounds_completed, repeat_of_session_id
@@ -340,6 +367,7 @@ async function sessionForOwner(sql: Queryable, sessionId: string, ownerId: strin
 }
 
 async function cardsForCurrentRound(sql: Queryable, session: SessionRow, roundNumber: number) {
+  setStage("study.load_round_cards");
   const cards = await sql<CardRow[]>`
     SELECT cards.id, days.day_number, cards.term, cards.meaning, cards.example_en, cards.example_ko, cards.example_status,
       study_session_cards.initial_order

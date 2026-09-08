@@ -12,6 +12,7 @@ FROM node:24-alpine
 
 WORKDIR /app
 ENV NODE_ENV=production
+ENV NODE_OPTIONS=--enable-source-maps
 COPY package.json package-lock.json ./
 COPY backend/package.json backend/package.json
 COPY frontend/package.json frontend/package.json
@@ -21,4 +22,3 @@ COPY backend/db backend/db
 WORKDIR /app/backend
 EXPOSE 4000
 CMD ["node", "dist/server.js"]
-

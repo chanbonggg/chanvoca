@@ -1,8 +1,10 @@
+import { setStage } from "../../shared/logger.js";
 import type { Queryable } from "../../shared/db.js";
 
 type OwnerRow = { id: string };
 
 export async function getOwnerId(sql: Queryable) {
+  setStage("owner.find");
   const existing = await sql<OwnerRow[]>`
     SELECT id
     FROM users
@@ -12,6 +14,7 @@ export async function getOwnerId(sql: Queryable) {
 
   if (existing[0]) return existing[0].id;
 
+  setStage("owner.create");
   const inserted = await sql<OwnerRow[]>`
     INSERT INTO users ${sql({ display_name: "owner" })}
     ON CONFLICT (display_name) DO NOTHING
@@ -20,6 +23,7 @@ export async function getOwnerId(sql: Queryable) {
 
   if (inserted[0]) return inserted[0].id;
 
+  setStage("owner.find_after_conflict");
   const owner = await sql<OwnerRow[]>`
     SELECT id
     FROM users

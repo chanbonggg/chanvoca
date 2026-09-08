@@ -1,3 +1,4 @@
+import { setStage } from "../../shared/logger.js";
 import type { FastifyInstance } from "fastify";
 
 import type { Database } from "../../shared/db.js";
@@ -19,6 +20,7 @@ type DayListRow = {
 export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
   app.get("/", async () => {
     const ownerId = await getOwnerId(sql);
+    setStage("days.list");
     const rows = await sql<DayListRow[]>`
       SELECT
         days.id,
@@ -75,15 +77,20 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
 
     const parsed = parseVocabularyFile(file.filename, content);
     if (!parsed.ok) {
+      request.log.warn({ event: "upload.invalid", errorCode: parsed.code, rows: parsed.rows, bytes: content.length }, "Vocabulary validation failed");
       return reply.code(parsed.code === "TOO_MANY_ROWS" ? 413 : 400).send({
         error: { code: parsed.code, message: parsed.message, ...(parsed.rows ? { rows: parsed.rows } : {}) },
       });
     }
 
+    setStage("upload.transaction");
+    request.log.info({ event: "upload.parsed", rowCount: parsed.cards.length, sourceFormat: parsed.sourceFormat, bytes: content.length }, "Vocabulary parsed");
     const day = await sql.begin(async (transaction) => {
       const ownerId = await getOwnerId(transaction);
+      setStage("upload.lock_day_number");
       await transaction`SELECT pg_advisory_xact_lock(hashtext(${`days:${ownerId}`}))`;
 
+      setStage("upload.find_latest_day");
       const latest = await transaction<{ day_number: number }[]>`
         SELECT day_number
         FROM days
@@ -92,6 +99,7 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
         LIMIT 1
       `;
       const dayNumber = (latest[0]?.day_number ?? 0) + 1;
+      setStage("upload.insert_day");
       const insertedDays = await transaction<{ id: string }[]>`
         INSERT INTO days ${transaction({
           user_id: ownerId,
@@ -103,6 +111,7 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
         RETURNING id
       `;
       const dayId = insertedDays[0]!.id;
+      setStage("upload.insert_cards");
       const cards = await transaction<{ id: string }[]>`
         INSERT INTO cards ${transaction(
           parsed.cards.map((card) => ({
@@ -115,12 +124,13 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
         RETURNING id
       `;
 
+      setStage("upload.enqueue_examples");
       await transaction`
         INSERT INTO jobs ${transaction(
           cards.map((card) => ({
             kind: "generate_example",
             dedupe_key: `card:${card.id}`,
-            payload: transaction.json({ cardId: card.id }),
+            payload: transaction.json({ cardId: card.id, traceId: request.id }),
           })),
         )}
         ON CONFLICT (kind, dedupe_key) DO NOTHING
@@ -129,6 +139,7 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
       return { id: dayId, dayNumber, rowCount: cards.length };
     });
 
+    request.log.info({ event: "upload.committed", dayId: day.id, dayNumber: day.dayNumber, rowCount: day.rowCount, jobsQueued: day.rowCount }, "Vocabulary import committed");
     return reply.code(201).send({ day, exampleJobsQueued: day.rowCount });
   });
 }

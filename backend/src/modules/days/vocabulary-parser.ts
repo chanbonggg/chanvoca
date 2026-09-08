@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { currentLog, setStage } from "../../shared/logger.js";
 
 export type VocabularyCardInput = {
   sourceRow: number;
@@ -15,6 +16,7 @@ const maxTermLength = 200;
 const maxMeaningLength = 1_000;
 
 export function parseVocabularyFile(filename: string, content: Buffer): VocabularyParseResult {
+  setStage("vocabulary.parse_file");
   const sourceFormat = formatFromFilename(filename);
   if (!sourceFormat) return failure("UNSUPPORTED_FILE", "xlsx, xls, csv 파일만 업로드할 수 있습니다.");
 
@@ -29,7 +31,8 @@ export function parseVocabularyFile(filename: string, content: Buffer): Vocabula
       }
       workbook = XLSX.read(content, { type: "buffer", raw: false });
     }
-  } catch {
+  } catch (err) {
+    currentLog().warn({ event: "vocabulary.parse_failed", sourceFormat, err }, "Vocabulary file could not be decoded");
     return failure(sourceFormat === "csv" ? "INVALID_UTF8_CSV" : "INVALID_FILE", sourceFormat === "csv" ? "CSV 파일은 UTF-8 인코딩이어야 합니다." : "엑셀 파일을 읽을 수 없습니다.");
   }
 

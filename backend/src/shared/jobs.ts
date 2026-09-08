@@ -1,5 +1,6 @@
 import type { Database, Queryable } from "./db.js";
 import type postgres from "postgres";
+import { currentLog } from "./logger.js";
 
 export type JobKind = "generate_example" | "send_push";
 
@@ -17,10 +18,14 @@ export async function enqueueJob(
   dedupeKey: string,
   payload: postgres.JSONValue,
 ) {
-  await sql`
-    INSERT INTO jobs ${sql({ kind, dedupe_key: dedupeKey, payload: sql.json(payload) })}
+  const traceId = currentLog().bindings().reqId;
+  const tracedPayload = payload && typeof payload === "object" && !Array.isArray(payload) && traceId
+    ? { ...payload, traceId } : payload;
+  const result = await sql`
+    INSERT INTO jobs ${sql({ kind, dedupe_key: dedupeKey, payload: sql.json(tracedPayload) })}
     ON CONFLICT (kind, dedupe_key) DO NOTHING
   `;
+  currentLog().debug({ event: "job.enqueued", kind, inserted: result.count }, "Job enqueue statement completed (transaction may still be pending)");
 }
 
 export async function claimJobs(sql: Database, workerId: string, kinds: JobKind[], limit = 3) {
@@ -47,12 +52,13 @@ export async function claimJobs(sql: Database, workerId: string, kinds: JobKind[
 }
 
 export async function recoverStaleJobs(sql: Database) {
-  await sql`
+  const result = await sql`
     UPDATE jobs
     SET status = 'queued', locked_at = NULL, locked_by = NULL
     WHERE status = 'processing'
       AND locked_at < now() - interval '15 minutes'
   `;
+  if (result.count) currentLog().warn({ event: "jobs.recovered", count: result.count }, "Stale jobs returned to queue");
 }
 
 export async function completeJob(sql: Database, jobId: string) {

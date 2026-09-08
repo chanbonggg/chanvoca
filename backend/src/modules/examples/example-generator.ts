@@ -1,3 +1,5 @@
+import { currentLog, setStage } from "../../shared/logger.js";
+
 type Example = { exampleEn: string; exampleKo: string };
 
 type GroqResponse = {
@@ -11,8 +13,12 @@ export class ExampleGenerationError extends Error {
 }
 
 export async function generateExample(term: string, meaning: string): Promise<Example> {
+  setStage("groq.configuration");
   const apiKey = requiredEnv("GROQ_API_KEY");
   const model = requiredEnv("GROQ_MODEL");
+  setStage("groq.request");
+  const started = performance.now();
+  currentLog().debug({ event: "groq.started" }, "Groq request started");
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -38,6 +44,7 @@ export async function generateExample(term: string, meaning: string): Promise<Ex
     signal: AbortSignal.timeout(20_000),
   });
 
+  currentLog().info({ event: "groq.response", statusCode: response.status, durationMs: performance.now() - started }, "Groq response headers received");
   if (!response.ok) {
     throw new ExampleGenerationError(
       response.status === 401 || response.status === 403 ? "GROQ_AUTH" : `GROQ_HTTP_${response.status}`,
@@ -45,12 +52,16 @@ export async function generateExample(term: string, meaning: string): Promise<Ex
     );
   }
 
+  setStage("groq.decode_response");
   const payload = await response.json() as GroqResponse;
   const content = payload.choices?.[0]?.message?.content;
 
   if (!content) throw new ExampleGenerationError("GROQ_EMPTY_RESPONSE", true);
 
-  return parseExample(content);
+  setStage("groq.validate_example");
+  const example = parseExample(content);
+  currentLog().info({ event: "groq.completed", durationMs: performance.now() - started }, "Groq example validated");
+  return example;
 }
 
 export function parseExample(content: string): Example {
@@ -83,4 +94,3 @@ function requiredEnv(name: "GROQ_API_KEY" | "GROQ_MODEL") {
   if (!value) throw new ExampleGenerationError(`MISSING_${name}`, false);
   return value;
 }
-
