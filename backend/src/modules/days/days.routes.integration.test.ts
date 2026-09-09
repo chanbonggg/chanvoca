@@ -13,7 +13,7 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
   await applyMigrations(sql);
   await sql.unsafe("TRUNCATE jobs, users CASCADE");
 
-  const app = buildApp(sql);
+  const app = buildApp(sql, undefined, null);
   try {
     const uploaded = await app.inject(multipartRequest("words.csv", "word,meaning\ncalm,침착한\ncalm,평온한\n"));
     assert.equal(uploaded.statusCode, 201);
@@ -149,7 +149,7 @@ test("imports headerless xlsx row 1 and keeps existing rows and positive-row val
   await applyMigrations(sql);
   await applyMigrations(sql); // Already-applied migrations must be safe to run again.
   await sql.unsafe("TRUNCATE jobs, users CASCADE");
-  const app = buildApp(sql);
+  const app = buildApp(sql, undefined, null);
   try {
     const original = await app.inject(multipartRequest("header.csv", "word,meaning\nsteady,꾸준한\n"));
     assert.equal(original.statusCode, 201);

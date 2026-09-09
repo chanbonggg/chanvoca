@@ -11,7 +11,7 @@
     "worker": "tsx --env-file=.env src/worker.ts",
     "vapid:generate": "tsx src/generate-vapid.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=1 src/modules/system/system.routes.test.ts src/modules/days/vocabulary-parser.test.ts src/modules/days/days.routes.integration.test.ts src/modules/study/review-plan.test.ts src/modules/examples/example-generator.test.ts src/modules/notifications/notifications.worker.test.ts src/modules/notifications/notifications.worker.integration.test.ts src/shared/logger.test.ts"
+    "test": "tsx --test --test-concurrency=1 src/modules/system/system.routes.test.ts src/modules/auth/auth.routes.test.ts src/modules/days/vocabulary-parser.test.ts src/modules/days/days.routes.integration.test.ts src/modules/study/review-plan.test.ts src/modules/examples/example-generator.test.ts src/modules/notifications/notifications.worker.test.ts src/modules/notifications/notifications.worker.integration.test.ts src/shared/logger.test.ts"
   },
   "dependencies": {
     "@fastify/multipart": "10.1.1",

@@ -1,5 +1,5 @@
-import { StudyApp } from "@/components/study-app";
+import { AuthGate } from "@/components/auth-gate";
 
 export default function HomePage() {
-  return <StudyApp />;
+  return <AuthGate />;
 }

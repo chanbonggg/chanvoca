@@ -4,12 +4,14 @@ import { randomUUID } from "node:crypto";
 import { logger, logContext } from "./shared/logger.js";
 
 import type { Database } from "./shared/db.js";
+import { loadAuthConfig, sessionStatus, type AuthConfig } from "./modules/auth/auth.js";
+import { registerAuthRoutes } from "./modules/auth/auth.routes.js";
 import { registerDaysRoutes } from "./modules/days/days.routes.js";
 import { registerNotificationRoutes } from "./modules/notifications/notifications.routes.js";
 import { registerStudyRoutes } from "./modules/study/study.routes.js";
 import { registerSystemRoutes } from "./modules/system/system.routes.js";
 
-export function buildApp(sql?: Database, log = logger) {
+export function buildApp(sql?: Database, log = logger, authConfig: AuthConfig | null = loadAuthConfig()) {
   const app = Fastify({ loggerInstance: log, logController: new LogController({ disableRequestLogging: true }), genReqId: () => randomUUID() });
   app.addHook("onRequest", (request, reply, done) => {
     reply.header("x-request-id", request.id);
@@ -33,6 +35,14 @@ export function buildApp(sql?: Database, log = logger) {
       if (context) context.log = context.log.child({ sessionId });
     }
   });
+  app.addHook("preHandler", async (request, reply) => {
+    const path = request.url.split("?", 1)[0];
+    if (!authConfig || path === "/api/health" || path === "/api/ready" || path.startsWith("/api/auth/")) return;
+    const status = sessionStatus(request.headers.cookie, authConfig);
+    if (status === "valid") return;
+    request.log.warn({ event: "auth.session_rejected", reason: status }, "Session rejected");
+    return reply.code(401).send({ error: { code: "AUTH_REQUIRED", message: "로그인이 필요합니다." } });
+  });
   app.addHook("onSend", async (request, reply, payload) => {
     if (reply.statusCode >= 400) {
       let errorCode: string | undefined;
@@ -53,6 +63,7 @@ export function buildApp(sql?: Database, log = logger) {
   app.register(multipart, { limits: { files: 1, fileSize: 10 * 1024 * 1024 } });
 
   app.register((instance) => registerSystemRoutes(instance, sql), { prefix: "/api" });
+  if (authConfig) app.register((instance) => registerAuthRoutes(instance, authConfig), { prefix: "/api" });
 
   if (sql) {
     app.addHook("onClose", () => sql.end());

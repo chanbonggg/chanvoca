@@ -10,7 +10,7 @@ test("request context survives awaits, stays isolated, and excludes sensitive re
   const lines: string[] = [];
   const log = createLogger("test", { write: (line) => { lines.push(line); } });
   log.level = "debug";
-  const app = buildApp(undefined, log);
+  const app = buildApp(undefined, log, null);
   app.post<{ Params: { id: string } }>("/probe/:id", async (request) => {
     setStage(`probe.${request.params.id}`);
     await new Promise((resolve) => setTimeout(resolve, request.params.id === "one" ? 10 : 1));
@@ -44,7 +44,7 @@ test("handled readiness failures and application rejections are logged", async (
   const lines: string[] = [];
   const log = createLogger("test", { write: (line) => { lines.push(line); } });
   const sql = Object.assign(async () => { throw Object.assign(new Error("secret-db-value"), { code: "08006" }); }, { end: async () => {} }) as unknown as Database;
-  const app = buildApp(sql, log);
+  const app = buildApp(sql, log, null);
   try {
     assert.equal((await app.inject("/api/ready")).statusCode, 503);
     assert.equal((await app.inject({ method: "POST", url: "/api/push/subscriptions", payload: {} })).statusCode, 400);

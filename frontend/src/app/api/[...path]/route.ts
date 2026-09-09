@@ -37,6 +37,7 @@ async function forward(request: Request) {
       const value = response.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
+    for (const cookie of response.headers.getSetCookie()) responseHeaders.append("set-cookie", cookie);
     responseHeaders.set("x-frontend-request-id", frontendRequestId);
     responseHeaders.set("cache-control", "no-store");
     serverLog(response.status >= 500 ? "error" : response.status >= 400 ? "warn" : "info", "proxy.completed", { ...fields, backendRequestId, statusCode: response.status, bytes: result.byteLength, durationMs: performance.now() - started });

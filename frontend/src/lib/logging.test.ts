@@ -18,7 +18,7 @@ test("multipart proxy preserves bytes and connects browser, frontend and backend
   const server = createServer(async (request, response) => {
     for await (const chunk of request) received += chunk.toString();
     assert.match(request.headers["content-type"]!, /multipart\/form-data; boundary=/);
-    response.writeHead(201, { "content-type": "application/json", "x-request-id": backendId });
+    response.writeHead(201, { "content-type": "application/json", "x-request-id": backendId, "set-cookie": "chanvoca_session=signed-value; HttpOnly" });
     response.end(JSON.stringify({ day: { id: "saved" } }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -34,7 +34,8 @@ test("multipart proxy preserves bytes and connects browser, frontend and backend
   form.set("file", new Blob(["secret-word,secret-meaning"]), "secret-filename.csv");
   const response = await forward(new Request("http://frontend/api/days/upload?token=secret-query", { method: "POST", body: form, headers: { "x-client-request-id": clientId } }));
   assert.equal(response.status, 201);
-  assert.equal(response.headers.get("x-request-id"), backendId);
+    assert.equal(response.headers.get("x-request-id"), backendId);
+    assert.equal(response.headers.get("set-cookie"), "chanvoca_session=signed-value; HttpOnly");
   assert.match(received, /secret-word,secret-meaning/);
   const completed = lines.map((line) => JSON.parse(line)).find((line) => line.event === "proxy.completed");
   assert.equal(completed.clientRequestId, clientId);

@@ -11,6 +11,7 @@
 - 누적 복습 세션·10초 타이머·정답/오답/시간 초과·반복 라운드와 DB 기록
 - Groq 예문 작업 큐와 별도 worker
 - 웹 푸시 구독, 매일 알림 scheduler, 알림 설정 UI
+- 단일 비밀번호·서명 쿠키 기반 개인 로그인 (DB 세션 테이블 없음)
 - 로컬 개발 Compose와 개인 서버용 Compose
 
 업로드는 `.xlsx`, `.xls`, UTF-8 CSV(UTF-8 BOM 포함)를 지원합니다. 첫 행은 헤더로 건너뛰고, 첫 두 열을 영어 단어와 뜻으로 저장합니다. 완전히 빈 행은 건너뛰며 단어 또는 뜻이 비어 있는 행이 하나라도 있으면 파일 전체를 저장하지 않고 오류 행을 알려 줍니다. 중복 단어도 각각 독립 카드로 보존합니다.
@@ -64,8 +65,27 @@ npm --workspace backend run migrate
 | `VAPID_SUBJECT` | backend 전용 | VAPID 연락처 (`mailto:` 또는 URL) |
 | `BACKEND_INTERNAL_URL` | frontend 서버 전용 | Next.js가 API를 전달할 주소 |
 | `APP_TIMEZONE` | backend 전용 | 기본 시간대 (기본 `Asia/Seoul`) |
+| `APP_PASSWORD` | backend 전용 | 로그인에 사용할 12자 이상 비밀번호 |
+| `APP_SESSION_SECRET` | backend 전용 | 32자 이상 세션 서명 비밀값 |
 
 `GROQ_API_KEY`, `DATABASE_URL`, VAPID 개인 키는 절대 `NEXT_PUBLIC_` 변수나 브라우저 코드에 넣지 않습니다. VAPID 공개 키는 구독 직전에 서버 API가 전달합니다.
+
+### 개인 로그인 설정
+
+DB 계정 테이블 없이, 한 개의 비밀번호와 서명된 보안 쿠키로 로그인합니다. `backend/.env`에 아래 두 값을 설정하세요. 비밀번호는 12자 이상, 세션 비밀값은 32자 이상이어야 합니다.
+
+```dotenv
+APP_PASSWORD=내가_정한_긴_비밀번호
+APP_SESSION_SECRET=무작위_32자_이상_문자열
+```
+
+세션 비밀값은 다음처럼 생성할 수 있습니다.
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
+```
+
+서버가 `APP_PASSWORD` 또는 `APP_SESSION_SECRET` 없이 시작되면 API가 기동되지 않습니다. 세션 비밀값을 교체하면 모든 기기가 로그아웃됩니다.
 
 ### Groq 예문 생성 연결
 
@@ -115,12 +135,21 @@ npm run build
 ```bash
 cp backend/.env.example backend/.env
 cp .env.production.example .env.production
-# backend/.env의 GROQ_*, VAPID_* 값을 설정
+# backend/.env의 GROQ_*, VAPID_*, APP_PASSWORD, APP_SESSION_SECRET 값을 설정
 # .env.production의 POSTGRES_PASSWORD를 긴 무작위 값으로 변경
 docker compose --env-file .env.production -f compose.production.yaml up -d --build
 ```
 
-`compose.production.yaml`은 PostgreSQL, API, worker, Next.js를 함께 실행하고 DB 데이터는 Docker volume에 보존합니다. 공인 인터넷에 로그인 없는 앱을 그대로 노출하면 누구나 데이터를 변경할 수 있습니다. 따라서 VPN/Tailscale 또는 리버스 프록시 인증을 먼저 적용하고, HTTPS를 제공해야 PWA 설치와 웹 푸시가 정상 동작합니다. 도메인·TLS 프록시 방식이 정해지면 그 환경에 맞는 프록시 설정을 추가합니다.
+`compose.production.yaml`은 PostgreSQL, API, worker, Next.js를 함께 실행하고 DB 데이터는 Docker volume에 보존합니다. 앱은 `APP_PASSWORD`로 로그인한 브라우저에만 API를 허용합니다. Nginx Basic Auth 또는 Cloudflare Access를 함께 쓸 필요는 없으며, HTTPS를 제공해야 PWA 설치와 웹 푸시가 정상 동작합니다.
+
+Nginx Basic Auth를 쓰던 서버에서는 앱 배포 전에 해당 사이트 블록의 아래 설정을 제거합니다. 앱 로그인 적용 전에는 제거하지 마세요.
+
+```nginx
+auth_basic ...;
+auth_basic_user_file ...;
+```
+
+변경 후 `sudo nginx -t`로 문법을 확인하고 `sudo systemctl reload nginx`로 적용합니다. 아이폰 홈 화면 앱은 기존 아이콘을 삭제한 뒤 Safari에서 새로 추가하면 됩니다.
 
 ## 문서
 

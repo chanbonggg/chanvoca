@@ -52,7 +52,7 @@ type Phase = "loading" | "empty" | "studying" | "complete" | "error";
 
 const activeSessionKey = "chanvoca:active-session";
 
-export function StudyApp() {
+export function StudyApp({ onLogout }: { onLogout: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [days, setDays] = useState<Day[]>([]);
   const [phase, setPhase] = useState<Phase>("loading");
@@ -382,6 +382,7 @@ export function StudyApp() {
           </section>
           <section className="menu-section"><h3>단어 가져오기</h3><label className={`upload-control ${uploading ? "is-uploading" : ""}`}><span>{uploading ? "업로드 중…" : "엑셀 또는 CSV 선택"}</span><small>.xlsx, .xls, .csv</small><input type="file" accept=".xlsx,.xls,.csv" disabled={uploading} onChange={(event) => { void uploadFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><p className="helper-text">헤더가 있으면 첫 행의 word/meaning 또는 단어/뜻을 인식해 제외합니다. 헤더 없이 첫 행부터 단어를 입력해도 됩니다. 빈 행은 건너뛰지만 단어 또는 뜻이 비어 있으면 파일 전체가 저장되지 않고 오류 행을 알려드립니다. CSV는 UTF-8만 지원합니다.</p>{uploadMessage && <p className="upload-message" role="alert">{uploadMessage}</p>}</section>
           <NotificationSettings />
+          <section className="menu-section"><button className="ghost-action" type="button" onClick={onLogout}>로그아웃</button></section>
         </aside>
       </div>}
     </main>
