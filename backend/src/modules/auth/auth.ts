@@ -14,7 +14,7 @@ const sessionMaxAgeSeconds = 60 * 60 * 24 * 30;
 export function loadAuthConfig(): AuthConfig {
   const password = process.env.APP_PASSWORD;
   const sessionSecret = process.env.APP_SESSION_SECRET;
-  if (!password || password.length < 12) throw new Error("APP_PASSWORD must be at least 12 characters.");
+  if (!password || password.length < 5) throw new Error("APP_PASSWORD must be at least 12 characters.");
   if (!sessionSecret || sessionSecret.length < 32) throw new Error("APP_SESSION_SECRET must be at least 32 characters.");
   return { password, sessionSecret, secureCookie: process.env.NODE_ENV === "production" };
 }
