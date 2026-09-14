@@ -61,6 +61,15 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
     const session = started.json() as { session: { id: string }; roundNumber: number; cards: Array<{ id: string }> };
     assert.equal(session.cards.length, 2);
 
+    const listUrl = `/api/study/sessions/${session.session.id}/days/${uploadBody.day.id}/cards`;
+    const initialList = await app.inject({ method: "GET", url: listUrl });
+    assert.equal(initialList.statusCode, 200);
+    assert.deepEqual(initialList.json().cards.map((card: { meaning: string; status: string }) => [card.meaning, card.status]), [
+      ["침착한", "unseen"], ["평온한", "unseen"],
+    ]);
+    assert.equal((await app.inject({ method: "GET", url: `/api/study/sessions/invalid/days/${uploadBody.day.id}/cards` })).statusCode, 400);
+    assert.equal((await app.inject({ method: "GET", url: `/api/study/sessions/${crypto.randomUUID()}/days/${uploadBody.day.id}/cards` })).statusCode, 404);
+
     for (const [index, card] of session.cards.entries()) {
       const attempt = await app.inject({
         method: "POST",
@@ -84,6 +93,11 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
     assert.equal(secondRoundBody.completed, false);
     assert.equal(secondRoundBody.roundNumber, 2);
     assert.equal(secondRoundBody.cards.length, 1);
+    const reviewedList = (await app.inject({ method: "GET", url: listUrl })).json();
+    assert.equal(reviewedList.cards.length, 2); // Passed cards remain visible in the full DAY list.
+    for (const card of reviewedList.cards) {
+      assert.equal(card.status, card.id === session.cards[0]!.id ? "unknown" : "known");
+    }
 
     const finalAttempt = await app.inject({
       method: "POST",
@@ -107,6 +121,11 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
     assert.equal(completedBody.session.knownCount, 2);
     assert.equal(completedBody.session.unknownCount, 1);
     assert.equal(completedBody.session.roundsCompleted, 2);
+    assert.ok((await app.inject({ method: "GET", url: listUrl })).json().cards.every((card: { status: string }) => card.status === "known"));
+    const repeated = (await app.inject({ method: "POST", url: "/api/study/sessions", payload: { repeatOfSessionId: session.session.id } })).json();
+    const repeatedList = (await app.inject({ method: "GET", url: `/api/study/sessions/${repeated.session.id}/days/${uploadBody.day.id}/cards` })).json();
+    assert.ok(repeatedList.cards.every((card: { status: string }) => card.status === "unseen"));
+    assert.ok((await app.inject({ method: "GET", url: listUrl })).json().cards.every((card: { status: string }) => card.status === "known"));
 
     const day2Response = await app.inject(multipartRequest("day2.csv", "word,meaning\nsecond,둘째\n"));
     const day3Response = await app.inject(multipartRequest("day3.csv", "word,meaning\nthird-a,셋째 A\nthird-b,셋째 B\n"));
@@ -118,6 +137,9 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
     const groupedBody = grouped.json() as { session: { id: string }; cards: Array<{ id: string }> };
     assert.equal(grouped.statusCode, 201);
     assert.equal(groupedBody.cards.length, 3);
+    const excludedDay = (await app.inject({ method: "GET", url: `/api/study/sessions/${groupedBody.session.id}/days/${uploadBody.day.id}/cards` })).json();
+    assert.equal(excludedDay.cards.length, 2);
+    assert.ok(excludedDay.cards.every((card: { status: string }) => card.status === "not_in_session"));
 
     for (const [index, card] of groupedBody.cards.entries()) {
       const attempt = await app.inject({

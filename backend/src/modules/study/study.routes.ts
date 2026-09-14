@@ -58,6 +58,37 @@ type ValidAttempt = {
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
+  app.get<{ Params: { sessionId: string; dayId: string } }>("/sessions/:sessionId/days/:dayId/cards", async (request, reply) => {
+    const { sessionId, dayId } = request.params;
+    if (!uuidPattern.test(sessionId) || !uuidPattern.test(dayId)) {
+      return reply.code(400).send(error("INVALID_ID", "학습 또는 Day ID가 올바르지 않습니다."));
+    }
+    const ownerId = await getOwnerId(sql);
+    const session = await sessionForOwner(sql, sessionId, ownerId);
+    if (!session) return reply.code(404).send(error("SESSION_NOT_FOUND", "학습 세션을 찾을 수 없습니다."));
+    const days = await sql<DayRow[]>`SELECT id, day_number FROM days WHERE id = ${dayId} AND user_id = ${ownerId}`;
+    if (!days[0]) return reply.code(404).send(error("DAY_NOT_FOUND", "Day를 찾을 수 없습니다."));
+    setStage("study.list_day_cards");
+    const cards = await sql<{
+      id: string; term: string; meaning: string; source_row: number;
+      status: "known" | "unknown" | "timeout" | "unseen" | "not_in_session";
+    }[]>`
+      SELECT cards.id, cards.term, cards.meaning, cards.source_row,
+        CASE WHEN sc.card_id IS NULL THEN 'not_in_session'
+          WHEN sc.passed_at_round IS NOT NULL THEN 'known'
+          ELSE COALESCE((SELECT result FROM study_attempts
+            WHERE session_id = ${sessionId} AND card_id = cards.id
+            ORDER BY round_number DESC, created_at DESC LIMIT 1), 'unseen') END AS status
+      FROM cards
+      LEFT JOIN study_session_cards sc ON sc.card_id = cards.id AND sc.session_id = ${sessionId}
+      WHERE cards.day_id = ${dayId}
+      ORDER BY cards.source_row
+    `;
+    return { dayNumber: days[0].day_number, cards: cards.map((card) => ({
+      id: card.id, term: card.term, meaning: card.meaning, sourceRow: card.source_row, status: card.status,
+    })) };
+  });
+
   app.post<{ Body: CreateSessionBody }>("/sessions", async (request, reply) => {
     const body = request.body ?? {};
 

@@ -54,6 +54,7 @@ const activeSessionKey = "chanvoca:active-session";
 
 export function StudyApp({ onLogout }: { onLogout: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [listDayId, setListDayId] = useState<string | null>(null);
   const [days, setDays] = useState<Day[]>([]);
   const [phase, setPhase] = useState<Phase>("loading");
   const [session, setSession] = useState<Session | null>(null);
@@ -70,6 +71,7 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
   const startedAtRef = useRef(0);
   const revealedAtRef = useRef<number | null>(null);
   const savingRef = useRef(false);
+  const timerRef = useRef<{ card: Card | null; remaining: number }>({ card: null, remaining: 10_000 });
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
 
@@ -228,7 +230,7 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
   }, [loadDays]);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen || listDayId) return;
 
     const drawer = drawerRef.current;
     const trigger = menuButtonRef.current;
@@ -252,14 +254,18 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
       document.removeEventListener("keydown", onKeyDown);
       trigger?.focus();
     };
-  }, [menuOpen]);
+  }, [menuOpen, listDayId]);
 
   useEffect(() => {
-    if (phase !== "studying" || !currentCard || revealed || timedOut) return;
+    if (phase !== "studying" || !currentCard || revealed || timedOut || menuOpen || listDayId) return;
 
     const startedAt = performance.now();
-    startedAtRef.current = startedAt;
-    revealedAtRef.current = null;
+    if (timerRef.current.card !== currentCard) {
+      timerRef.current = { card: currentCard, remaining: 10_000 };
+      startedAtRef.current = startedAt;
+      revealedAtRef.current = null;
+    }
+    const deadline = startedAt + timerRef.current.remaining;
     const expire = () => {
       clientLog("debug", "study.card_timeout", { cardId: currentCard.id });
       setRemainingSeconds(0);
@@ -268,27 +274,28 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
     };
 
     const intervalId = window.setInterval(() => {
-      setRemainingSeconds(Math.max(0, Math.ceil((startedAt + 10_000 - performance.now()) / 1_000)));
+      setRemainingSeconds(Math.max(0, Math.ceil((deadline - performance.now()) / 1_000)));
     }, 100);
-    const timeoutId = window.setTimeout(expire, 10_000);
+    const timeoutId = window.setTimeout(expire, timerRef.current.remaining);
     const onVisibilityChange = () => {
-      if (!document.hidden && performance.now() >= startedAt + 10_000) expire();
+      if (!document.hidden && performance.now() >= deadline) expire();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
+      timerRef.current.remaining = Math.max(0, deadline - performance.now());
       window.clearInterval(intervalId);
       window.clearTimeout(timeoutId);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [currentCard, phase, revealed, submitResult, timedOut]);
+  }, [currentCard, phase, revealed, submitResult, timedOut, menuOpen, listDayId]);
 
   useEffect(() => {
-    if (!timedOut) return;
+    if (!timedOut || menuOpen || listDayId) return;
 
     const timeoutId = window.setTimeout(() => void submitResult("timeout"), 1_200);
     return () => window.clearTimeout(timeoutId);
-  }, [submitResult, timedOut]);
+  }, [submitResult, timedOut, menuOpen, listDayId]);
 
   const reveal = () => {
     if (!currentCard || revealed || timedOut || saving) return;
@@ -339,7 +346,7 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
       <section className="app-shell" aria-label="영단어 학습 앱">
         <header className="top-bar">
           <button ref={menuButtonRef} className="icon-button" type="button" aria-label="메뉴 열기" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><span aria-hidden="true">☰</span></button>
-          <div className="day-label"><span className="eyebrow">{phase === "complete" ? "COMPLETE" : "TODAY"}</span><strong>{activeDay ? `Day ${activeDay}` : "Day —"}</strong></div>
+          <div className="day-label"><span className="eyebrow">{phase === "complete" ? "COMPLETE" : "TODAY"}</span><strong>{activeDay ? `Day ${activeDay}` : "Day —"}</strong>{session && <button className="day-words-button" type="button" disabled={saving || phase === "loading"} onClick={() => setListDayId(session.targetDayId)}>전체 단어 보기</button>}</div>
           <div className="session-stats" aria-label="학습 상태"><span>{session ? `${session.knownCount} / ${session.totalCards}` : "0 / 0"}</span><strong>{revealed ? "—" : `${remainingSeconds}s`}</strong></div>
         </header>
 
@@ -380,13 +387,48 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
             <div className="menu-title-row"><h3>Day 선택</h3><span>{days.length}개</span></div>
             {days.length === 0 ? <p className="empty-note">업로드된 Day가 없습니다.</p> : <div className="day-list">{days.map((day) => <button className={`day-item ${day.id === session?.targetDayId ? "is-active" : ""}`} type="button" key={day.id} onClick={() => void selectDay(day.id)}><span><strong>Day {day.dayNumber}</strong><small>{day.rowCount}개 단어</small></span><small>{day.examples.ready}/{day.rowCount} 예문</small></button>)}</div>}
           </section>
+          {session && <section className="menu-section"><h3>DAY 전체 단어 확인</h3><div className="day-list">{days.map((day) => <button className="ghost-action" type="button" key={day.id} disabled={saving} onClick={() => setListDayId(day.id)}>Day {day.dayNumber} 전체 단어 보기</button>)}</div></section>}
           <section className="menu-section"><h3>단어 가져오기</h3><label className={`upload-control ${uploading ? "is-uploading" : ""}`}><span>{uploading ? "업로드 중…" : "엑셀 또는 CSV 선택"}</span><small>.xlsx, .xls, .csv</small><input type="file" accept=".xlsx,.xls,.csv" disabled={uploading} onChange={(event) => { void uploadFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><p className="helper-text">헤더가 있으면 첫 행의 word/meaning 또는 단어/뜻을 인식해 제외합니다. 헤더 없이 첫 행부터 단어를 입력해도 됩니다. 빈 행은 건너뛰지만 단어 또는 뜻이 비어 있으면 파일 전체가 저장되지 않고 오류 행을 알려드립니다. CSV는 UTF-8만 지원합니다.</p>{uploadMessage && <p className="upload-message" role="alert">{uploadMessage}</p>}</section>
           <NotificationSettings />
           <section className="menu-section"><button className="ghost-action" type="button" onClick={onLogout}>로그아웃</button></section>
         </aside>
       </div>}
+      {listDayId && session && <DayWords key={`${session.id}:${listDayId}`} sessionId={session.id} dayId={listDayId} onClose={() => setListDayId(null)} />}
     </main>
   );
+}
+
+type DayWord = { id: string; term: string; meaning: string; sourceRow: number; status: "known" | "unknown" | "timeout" | "unseen" | "not_in_session" };
+const wordStatusLabels = { known: "알았음", unknown: "몰랐음", timeout: "시간 초과", unseen: "아직 안 봄", not_in_session: "이번 학습 대상 아님" };
+
+function DayWords({ sessionId, dayId, onClose }: { sessionId: string; dayId: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [data, setData] = useState<{ dayNumber: number; cards: DayWord[] } | null>(null);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const dialog = dialogRef.current!;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
+  useEffect(() => {
+    let active = true;
+    api<{ dayNumber: number; cards: DayWord[] }>(`/api/study/sessions/${sessionId}/days/${dayId}/cards`)
+      .then((result) => { if (active) setData(result); })
+      .catch((cause) => { if (active) setError(messageFrom(cause)); });
+    return () => { active = false; };
+  }, [sessionId, dayId, retry]);
+  return <dialog ref={dialogRef} className="day-words-dialog" aria-labelledby="day-words-title" onCancel={onClose}>
+    <div className="drawer-heading"><h2 id="day-words-title">{data ? `Day ${data.dayNumber}` : "DAY"} 전체 단어</h2><button className="icon-button" type="button" aria-label="단어 목록 닫기" onClick={onClose}>×</button></div>
+    <p className="helper-text">현재 학습 기준 표시입니다. 목록을 보는 동안 학습 타이머가 멈춥니다.</p>
+    {error ? <div role="alert"><p>{error}</p><button className="ghost-action" type="button" onClick={() => { setError(""); setRetry((value) => value + 1); }}>다시 불러오기</button></div> : !data ? <p role="status">단어를 불러오는 중…</p> : <>
+      <p className="word-list-summary">전체 {data.cards.length}개 · 알았음 {data.cards.filter((card) => card.status === "known").length}개</p>
+      {data.cards.length === 0 ? <p>저장된 단어가 없습니다.</p> : <ol className="day-words-list">{data.cards.map((card) => <li key={card.id}>
+        <div className="word-list-content"><strong>{card.term}</strong><p>{card.meaning}</p><small>원본 {card.sourceRow}행</small></div>
+        <span className={`word-status ${card.status}`}>{card.status === "known" ? "✓ " : ""}{wordStatusLabels[card.status]}</span>
+      </li>)}</ol>}
+    </>}
+  </dialog>;
 }
 
 function LoadingCard() {

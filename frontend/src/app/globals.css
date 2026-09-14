@@ -87,6 +87,39 @@ button {
   font-size: 1.05rem;
 }
 
+.day-words-button {
+  justify-self: start;
+  border: 0;
+  padding: 6px 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.day-words-dialog {
+  width: min(94vw, 560px);
+  max-height: 85dvh;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--surface);
+  color: var(--text);
+  overflow-y: auto;
+}
+
+.day-words-dialog::backdrop { background: rgba(0, 0, 0, 0.75); }
+.day-words-dialog .icon-button { flex-shrink: 0; }
+.word-list-summary { color: var(--accent); }
+.day-words-list { margin: 0; padding-left: 26px; }
+.day-words-list li { padding: 14px 0; border-top: 1px solid var(--line); }
+.word-list-content { overflow-wrap: anywhere; }
+.word-list-content p { margin: 6px 0; }
+.word-list-content small { color: var(--muted); }
+.word-status { display: inline-block; margin-top: 8px; font-size: 0.78rem; color: var(--muted); }
+.word-status.known { color: var(--accent); }
+.word-status.unknown, .word-status.timeout { color: var(--danger); }
+
 .session-stats {
   display: flex;
   align-items: center;
