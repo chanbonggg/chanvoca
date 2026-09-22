@@ -1,0 +1,69 @@
+architecture:
+  greenfield_default: modular_monolith
+frontend:
+  enabled: auto
+commands:
+  lint:
+    argv:
+    - npm
+    - run
+    - lint
+    cwd: frontend
+  typecheck:
+    argv:
+    - npm
+    - run
+    - typecheck
+    cwd: frontend
+  build:
+    argv:
+    - npm
+    - run
+    - build
+    cwd: frontend
+  test:
+    argv:
+    - npm
+    - run
+    - test
+    cwd: frontend
+  dev:
+    argv:
+    - npm
+    - run
+    - dev
+    cwd: frontend
+  start:
+    argv:
+    - npm
+    - run
+    - start
+    cwd: frontend
+approval:
+  planning: required
+  prototype: required
+  final: required
+retry:
+  agent: 2
+  implementation: 3
+  verification: 2
+  review: 2
+agents_md:
+  auto_sync: true
+model_policy:
+  escalation:
+    enabled: true
+    max_escalations_per_run: 3
+execution:
+  timeout: 1200
+  command_timeout: 300
+  sandbox_commands: true
+verification:
+  test_paths:
+  - tests/
+  - test/
+  - e2e/
+  environment: {}
+project:
+  name: chanvoca
+  mode: existing

@@ -1,0 +1,15 @@
+workflow:
+- stage: discovery
+- stage: planning
+- stage: waiting_for_planning_approval
+- stage: agent_configuration
+- stage: scaffolding
+- stage: prototype
+- stage: waiting_for_prototype_approval
+- stage: implementation
+- stage: harness_test
+- stage: real_verification
+- stage: agents_md_sync
+- stage: review
+- stage: waiting_for_final_approval
+- stage: completed
