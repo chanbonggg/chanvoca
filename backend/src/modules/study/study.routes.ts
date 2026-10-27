@@ -2,7 +2,7 @@ import { setStage } from "../../shared/logger.js";
 import type { FastifyInstance } from "fastify";
 
 import type { Database, Queryable } from "../../shared/db.js";
-import { getOwnerId } from "../system/owner.js";
+import { requestUser } from "../auth/index.js";
 import { reviewDayNumbers, shuffled, shuffledWithinDays } from "./review-plan.js";
 
 type DayRow = { id: string; day_number: number };
@@ -58,15 +58,21 @@ type ValidAttempt = {
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
+  app.addHook("preHandler", async (request, reply) => {
+    const params = request.params as Record<string, unknown>;
+    const body = request.body as Record<string, unknown> | undefined;
+    const ids = [params?.sessionId, params?.dayId, body?.targetDayId, body?.repeatOfSessionId];
+    if (ids.some((id) => id !== undefined && (typeof id !== "string" || !uuidPattern.test(id)))) return reply.code(400).send(error("INVALID_ID", "올바른 ID가 필요합니다."));
+  });
   app.get<{ Params: { sessionId: string; dayId: string } }>("/sessions/:sessionId/days/:dayId/cards", async (request, reply) => {
     const { sessionId, dayId } = request.params;
     if (!uuidPattern.test(sessionId) || !uuidPattern.test(dayId)) {
       return reply.code(400).send(error("INVALID_ID", "학습 또는 Day ID가 올바르지 않습니다."));
     }
-    const ownerId = await getOwnerId(sql);
-    const session = await sessionForOwner(sql, sessionId, ownerId);
+    const userId = requestUser(request).id;
+    const session = await sessionForUser(sql, sessionId, userId);
     if (!session) return reply.code(404).send(error("SESSION_NOT_FOUND", "학습 세션을 찾을 수 없습니다."));
-    const days = await sql<DayRow[]>`SELECT id, day_number FROM days WHERE id = ${dayId} AND user_id = ${ownerId}`;
+    const days = await sql<DayRow[]>`SELECT id, day_number FROM days WHERE id = ${dayId} AND user_id = ${userId}`;
     if (!days[0]) return reply.code(404).send(error("DAY_NOT_FOUND", "Day를 찾을 수 없습니다."));
     setStage("study.list_day_cards");
     const cards = await sql<{
@@ -98,8 +104,8 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
 
     setStage("study.create_transaction");
     const result = await sql.begin(async (transaction) => {
-      const ownerId = await getOwnerId(transaction);
-      const target = await findTargetDay(transaction, ownerId, body);
+      const userId = requestUser(request).id;
+      const target = await findTargetDay(transaction, userId, body);
 
       if (!target) return null;
 
@@ -108,7 +114,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
       const planDays = await transaction<DayRow[]>`
         SELECT id, day_number
         FROM days
-        WHERE user_id = ${ownerId}
+        WHERE user_id = ${userId}
           AND day_number = ANY(${planNumbers})
         ORDER BY day_number DESC
       `;
@@ -125,7 +131,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
       setStage("study.insert_session");
       const sessionRows = await transaction<SessionRow[]>`
         INSERT INTO study_sessions ${transaction({
-          user_id: ownerId,
+          user_id: userId,
           target_day_id: target.id,
           target_day_number: target.day_number,
           plan_day_numbers: planDays.map((day) => day.day_number),
@@ -168,8 +174,8 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
   });
 
   app.get<{ Params: { sessionId: string } }>("/sessions/:sessionId", async (request, reply) => {
-    const ownerId = await getOwnerId(sql);
-    const session = await sessionForOwner(sql, request.params.sessionId, ownerId);
+    const userId = requestUser(request).id;
+    const session = await sessionForUser(sql, request.params.sessionId, userId);
 
     if (!session) return reply.code(404).send(error("SESSION_NOT_FOUND", "학습 세션을 찾을 수 없습니다."));
 
@@ -196,8 +202,8 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
 
       setStage("study.attempt_transaction");
       const result = await sql.begin(async (transaction) => {
-        const ownerId = await getOwnerId(transaction);
-        const session = await sessionForOwner(transaction, request.params.sessionId, ownerId);
+        const userId = requestUser(request).id;
+        const session = await sessionForUser(transaction, request.params.sessionId, userId);
 
         if (!session || session.status !== "in_progress") return null;
         if (attempt.roundNumber !== session.rounds_completed + 1) return "round-mismatch" as const;
@@ -280,8 +286,8 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
   app.post<{ Params: { sessionId: string } }>("/sessions/:sessionId/rounds", async (request, reply) => {
     setStage("study.round_transaction");
     const result = await sql.begin(async (transaction) => {
-      const ownerId = await getOwnerId(transaction);
-      const session = await sessionForOwner(transaction, request.params.sessionId, ownerId);
+      const userId = requestUser(request).id;
+      const session = await sessionForUser(transaction, request.params.sessionId, userId);
 
       if (!session || session.status !== "in_progress") return null;
 
@@ -349,7 +355,7 @@ export async function registerStudyRoutes(app: FastifyInstance, sql: Database) {
   });
 }
 
-async function findTargetDay(sql: Queryable, ownerId: string, body: CreateSessionBody) {
+async function findTargetDay(sql: Queryable, userId: string, body: CreateSessionBody) {
   if (body.repeatOfSessionId) {
     setStage("study.find_repeat_day");
     const repeated = await sql<DayRow[]>`
@@ -357,7 +363,7 @@ async function findTargetDay(sql: Queryable, ownerId: string, body: CreateSessio
       FROM study_sessions
       JOIN days ON days.id = study_sessions.target_day_id
       WHERE study_sessions.id = ${body.repeatOfSessionId}
-        AND study_sessions.user_id = ${ownerId}
+        AND study_sessions.user_id = ${userId}
         AND study_sessions.status = 'completed'
     `;
     return repeated[0];
@@ -369,7 +375,7 @@ async function findTargetDay(sql: Queryable, ownerId: string, body: CreateSessio
       SELECT id, day_number
       FROM days
       WHERE id = ${body.targetDayId}
-        AND user_id = ${ownerId}
+        AND user_id = ${userId}
     `;
     return selected[0];
   }
@@ -378,21 +384,22 @@ async function findTargetDay(sql: Queryable, ownerId: string, body: CreateSessio
   const latest = await sql<DayRow[]>`
     SELECT id, day_number
     FROM days
-    WHERE user_id = ${ownerId}
+    WHERE user_id = ${userId}
     ORDER BY day_number DESC
     LIMIT 1
   `;
   return latest[0];
 }
 
-async function sessionForOwner(sql: Queryable, sessionId: string, ownerId: string) {
+async function sessionForUser(sql: Queryable, sessionId: string, userId: string) {
   setStage("study.find_session");
   const sessions = await sql<SessionRow[]>`
     SELECT id, target_day_id, target_day_number, plan_day_numbers, status,
       total_cards, known_count, unknown_count, timeout_count, rounds_completed, repeat_of_session_id
     FROM study_sessions
     WHERE id = ${sessionId}
-      AND user_id = ${ownerId}
+      AND user_id = ${userId}
+    FOR UPDATE
   `;
   return sessions[0];
 }

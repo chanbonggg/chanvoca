@@ -1,10 +1,11 @@
 # 데이터 모델
 
-PostgreSQL 기준 논리 모델이다. 다음 단계에서 이 문서를 바탕으로 `db/migrations/0001_initial.sql`을 만들고 실제 DB에서 migration과 제약 조건을 검증한다. 모든 시간은 `timestamptz` UTC로 저장하고, 사용자 표시와 알림 계산에만 IANA 시간대를 적용한다.
+PostgreSQL 기준 논리 모델이다. 실제 스키마는 backend/db/migrations의 초기 migration과 후속 migration을 기준으로 하며, 계정 인증은 0003_multi_user_auth에서 추가한다. 모든 시간은 `timestamptz` UTC로 저장하고, 사용자 표시와 알림 계산에만 IANA 시간대를 적용한다.
 
 실제 migration은 `backend/db/migrations/`의 단일 순서로 관리한다. 파일 이름에 소유 모듈을 표시하고, 테이블 접근 코드는 아래 모듈 경계를 따른다.
 
-- `system`: `users` bootstrap과 schema version
+- `system`: health/readiness
+- `auth`: users, 자격 증명, 인증 세션, 초대와 요청 제한
 - `days`: `days`, `cards`
 - `study`: `study_sessions`, `study_session_cards`, `study_attempts`
 - `examples`: `jobs` 중 `generate_example` 작업과 카드 예문 필드
@@ -37,7 +38,7 @@ study_sessions 0..1 ── N study_sessions (repeat_of)
 | `created_at` | `timestamptz` | 기본 `now()` |
 | `updated_at` | `timestamptz` | 변경 시 갱신 |
 
-초기 부트스트랩은 사용자 행이 없을 때 고정된 `owner`를 생성한다. 로그인은 없으며 모든 API는 이 owner ID를 서버에서 조회한다. 이후 계정 기능을 추가하면 credential/session 테이블을 별도로 만들고 이 테이블을 그대로 확장한다.
+auth CLI의 초기 설정이 기존 owner ID에 자격 증명을 연결한다. 빈 DB에서는 첫 사용자를 만든다. API는 DB 인증 세션의 사용자 ID를 사용하며 owner를 자동 생성하거나 대체하지 않는다.
 
 ## `days`
 
@@ -212,3 +213,11 @@ PK는 `(session_id, card_id)`다. 원본 중복 단어도 카드 ID가 다르므
 - LLM 오류와 업로드 원본 파일을 얼마나 오래 보존할지
 
 기본안은 업로드 원본 파일을 DB나 디스크에 영구 저장하지 않고, 파싱 transaction이 끝나면 폐기하는 것이다.
+
+## 다중 사용자 인증 (0003_multi_user_auth)
+
+- auth 모듈이 users와 auth_credentials(사용자별 고유 로그인 ID·scrypt 해시), auth_sessions(토큰 해시·만료·무효화), auth_invites(일회용 코드 해시·만료·사용·취소), auth_rate_limits(공유 카운터)를 소유한다.
+- push_subscriptions.auth_session_id는 auth_sessions를 참조하고 삭제 시 NULL이 된다. 학습 데이터는 인증 세션 삭제에 따라 삭제되지 않는다.
+- 푸시 발송은 사용자·인증 세션·구독 연결을 함께 확인한다. 과거 연결의 대기 작업은 새 연결에서 발송하지 않는다.
+- 기존 사용자별 Day 제약·인덱스·잠금을 재사용해 신규 카드의 일일 한도 검사와 업로드를 원자적으로 처리한다.
+- 상세 migration·전환·검증 기준은 MULTI_USER_PLAN.md를 따른다.

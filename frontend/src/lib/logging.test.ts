@@ -1,3 +1,4 @@
+import { flushLogs } from "./client-log";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -5,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { POST as forward } from "../app/api/[...path]/route";
 import { POST as receiveLogs } from "../app/api/client-logs/route";
-import { api, ApiError, messageFrom } from "./api";
+import { api, ApiError, messageFrom, setApiUser } from "./api";
 import { safeFields, errorFields } from "./log-fields";
 import { BodyTooLarge, readLimitedBody } from "./read-limited-body";
 
@@ -102,4 +103,51 @@ test("service worker reports notification failures without exposing notification
   await assert.rejects(pending);
   assert.match(reports.join(""), /pwa.notification_failed/);
   assert.doesNotMatch(reports.join(""), /secret-/);
+});
+
+
+test("late responses from a previous account cannot overwrite or sign out the new account", async (t) => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const events = new EventTarget();
+  Object.defineProperty(globalThis, "window", { configurable: true, value: events });
+  let notifications = 0;
+  events.addEventListener("chanvoca:auth-required", () => notifications++);
+  let finish!: (response: Response) => void;
+  let captured: Headers | undefined;
+  let delayed = true;
+  t.mock.method(console, "error", () => {});
+  t.mock.method(console, "info", () => {});
+  t.mock.method(globalThis, "fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (url === "/api/client-logs") return new Response(null, { status: 204 });
+    captured = new Headers(init?.headers);
+    return delayed ? new Promise<Response>((resolve) => { finish = resolve; }) : Response.json({ days: [] });
+  });
+  t.after(() => { flushLogs(); if (previous) Object.defineProperty(globalThis, "window", previous); else Reflect.deleteProperty(globalThis, "window"); setApiUser(null); });
+  setApiUser("account-a");
+  const pending = api("/api/days");
+  assert.equal(captured?.get("x-chanvoca-user"), "account-a");
+  setApiUser("account-b");
+  finish(Response.json({ error: { code: "AUTH_REQUIRED", message: "expired" } }, { status: 401 }));
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.equal(notifications, 0);
+  delayed = false;
+  await api("/api/days");
+  assert.equal(captured?.get("x-chanvoca-user"), "account-b");
+});
+
+test("protected API expiry requests authentication but a wrong login does not", async (t) => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const events = new EventTarget();
+  Object.defineProperty(globalThis, "window", { configurable: true, value: events });
+  let notifications = 0;
+  events.addEventListener("chanvoca:auth-required", () => notifications++);
+  t.mock.method(console, "error", () => {});
+  t.mock.method(console, "info", () => {});
+  t.mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => url === "/api/client-logs" ? new Response(null, { status: 204 }) : Response.json({ error: { code: "AUTH_REQUIRED", message: "expired" } }, { status: 401 }));
+  t.after(() => { flushLogs(); if (previous) Object.defineProperty(globalThis, "window", previous); else Reflect.deleteProperty(globalThis, "window"); setApiUser(null); });
+  setApiUser("account-a");
+  await assert.rejects(api("/api/days"), ApiError);
+  assert.equal(notifications, 1);
+  await assert.rejects(api("/api/auth/login", { method: "POST", body: "{}" }), ApiError);
+  assert.equal(notifications, 1);
 });

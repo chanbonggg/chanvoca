@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 
 import type { Database } from "../../shared/db.js";
 import { parseVocabularyFile } from "./vocabulary-parser.js";
-import { getOwnerId } from "../system/owner.js";
+import { requestUser } from "../auth/index.js";
 
 type DayListRow = {
   id: string;
@@ -17,9 +17,9 @@ type DayListRow = {
   example_failed: string;
 };
 
-export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
-  app.get("/", async () => {
-    const ownerId = await getOwnerId(sql);
+export async function registerDaysRoutes(app: FastifyInstance, sql: Database, maxDailyCards: number) {
+  app.get("/", async (request) => {
+    const userId = requestUser(request).id;
     setStage("days.list");
     const rows = await sql<DayListRow[]>`
       SELECT
@@ -34,7 +34,7 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
         count(cards.id) FILTER (WHERE cards.example_status = 'failed') AS example_failed
       FROM days
       LEFT JOIN cards ON cards.day_id = days.id
-      WHERE days.user_id = ${ownerId}
+      WHERE days.user_id = ${userId}
       GROUP BY days.id
       ORDER BY days.day_number DESC
     `;
@@ -86,15 +86,23 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
     setStage("upload.transaction");
     request.log.info({ event: "upload.parsed", rowCount: parsed.cards.length, sourceFormat: parsed.sourceFormat, bytes: content.length }, "Vocabulary parsed");
     const day = await sql.begin(async (transaction) => {
-      const ownerId = await getOwnerId(transaction);
+      const userId = requestUser(request).id;
       setStage("upload.lock_day_number");
-      await transaction`SELECT pg_advisory_xact_lock(hashtext(${`days:${ownerId}`}))`;
+      await transaction`SELECT pg_advisory_xact_lock(hashtext(${`days:${userId}`}))`;
 
+      const usage = await transaction<{ used: number; retry: number }[]>`
+        SELECT COALESCE(sum(row_count), 0)::int AS used,
+          greatest(1, ceil(extract(epoch FROM ((date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') + interval '1 day') AT TIME ZONE 'Asia/Seoul') - now())))::int AS retry
+        FROM days WHERE user_id = ${userId}
+          AND imported_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'
+          AND imported_at < (date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') + interval '1 day') AT TIME ZONE 'Asia/Seoul'
+      `;
+      if (usage[0].used + parsed.cards.length > maxDailyCards) return { limited: true as const, retry: usage[0].retry };
       setStage("upload.find_latest_day");
       const latest = await transaction<{ day_number: number }[]>`
         SELECT day_number
         FROM days
-        WHERE user_id = ${ownerId}
+        WHERE user_id = ${userId}
         ORDER BY day_number DESC
         LIMIT 1
       `;
@@ -102,7 +110,7 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
       setStage("upload.insert_day");
       const insertedDays = await transaction<{ id: string }[]>`
         INSERT INTO days ${transaction({
-          user_id: ownerId,
+          user_id: userId,
           day_number: dayNumber,
           original_filename: file.filename.slice(0, 255),
           source_format: parsed.sourceFormat,
@@ -139,6 +147,7 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database) {
       return { id: dayId, dayNumber, rowCount: cards.length };
     });
 
+    if ("limited" in day) return reply.header("retry-after", day.retry).code(429).send(errorPayload("DAILY_CARD_LIMIT", "오늘의 업로드 한도에 도달했습니다. 내일 다시 시도하세요."));
     request.log.info({ event: "upload.committed", dayId: day.id, dayNumber: day.dayNumber, rowCount: day.rowCount, jobsQueued: day.rowCount }, "Vocabulary import committed");
     return reply.code(201).send({ day, exampleJobsQueued: day.rowCount });
   });

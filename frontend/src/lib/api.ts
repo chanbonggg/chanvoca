@@ -1,6 +1,10 @@
 import { clientLog, reportError } from "./client-log";
 import { routeName } from "./log-fields";
 
+let activeUser: string | null = null;
+let authGeneration = 0;
+export function setApiUser(userId: string | null) { activeUser = userId; authGeneration++; }
+
 export class ApiError extends Error {
   constructor(message: string, readonly statusCode: number, readonly errorCode: string,
     readonly clientRequestId: string, readonly frontendRequestId?: string, readonly backendRequestId?: string) {
@@ -10,12 +14,14 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const generation = authGeneration;
   const clientRequestId = crypto.randomUUID();
   const started = performance.now();
   const fields = { clientRequestId, route: routeName(path), method: init?.method ?? "GET" };
   const headers = new Headers(init?.headers);
   if (init?.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   headers.set("x-client-request-id", clientRequestId);
+  if (activeUser && !["/api/auth/login", "/api/auth/register", "/api/auth/session"].includes(path)) headers.set("x-chanvoca-user", activeUser);
   clientLog("info", "api.started", fields, false);
   let stage = "api.fetch";
   try {
@@ -26,7 +32,9 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     clientLog("debug", "api.response", responseFields, false);
     stage = "api.decode_response";
     const data = response.status === 204 ? null : await response.json().catch(() => null) as { error?: { message?: string; code?: string; rows?: number[] }; message?: string } | null;
+    if (generation !== authGeneration) throw new DOMException("Account changed", "AbortError");
     if (!response.ok) {
+      if ((response.status === 401 || data?.error?.code === "AUTH_CHANGED") && !path.startsWith("/api/auth/")) window.dispatchEvent(new Event("chanvoca:auth-required"));
       const rowText = data?.error?.rows?.length ? ` (오류 행: ${data.error.rows.join(", ")})` : "";
       throw new ApiError(`${data?.error?.message ?? "서버 요청에 실패했습니다."}${rowText}`, response.status,
         data?.error?.code ?? `HTTP_${response.status}`, clientRequestId, frontendRequestId, backendRequestId);

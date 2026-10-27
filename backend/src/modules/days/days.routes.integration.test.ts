@@ -1,3 +1,4 @@
+import { loginOwner, testConfig, testDatabaseUrl } from "../../test-support.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
@@ -6,16 +7,18 @@ import { buildApp } from "../../app.js";
 import { createDatabase } from "../../shared/db.js";
 import { applyMigrations } from "../../shared/migrations.js";
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
+const databaseUrl = testDatabaseUrl();
 
-test("uploads cards atomically and completes an unknown-card review round", { skip: !databaseUrl, timeout: 20_000 }, async () => {
+test("uploads cards atomically and completes an unknown-card review round", { timeout: 20_000 }, async () => {
   const sql = createDatabase(databaseUrl);
   await applyMigrations(sql);
   await sql.unsafe("TRUNCATE jobs, users CASCADE");
 
-  const app = buildApp(sql, undefined, null);
+  const app = buildApp(sql, undefined, testConfig);
+  const cookie = await loginOwner(app, sql);
+  const inject = (options: import("fastify").InjectOptions) => app.inject({ ...options, headers: { cookie, origin: testConfig.origin, ...options.headers } });
   try {
-    const uploaded = await app.inject(multipartRequest("words.csv", "word,meaning\ncalm,침착한\ncalm,평온한\n"));
+    const uploaded = await inject(multipartRequest("words.csv", "word,meaning\ncalm,침착한\ncalm,평온한\n"));
     assert.equal(uploaded.statusCode, 201);
     const uploadBody = uploaded.json() as { day: { id: string; dayNumber: number; rowCount: number }; exampleJobsQueued: number };
     assert.equal(uploadBody.day.dayNumber, 1);
@@ -38,7 +41,7 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
     `;
     assert.equal(Number(queuedJobs[0]!.count), 2);
 
-    const failedUpload = await app.inject(multipartRequest("broken.csv", "word,meaning\nmissing,\n"));
+    const failedUpload = await inject(multipartRequest("broken.csv", "word,meaning\nmissing,\n"));
     assert.equal(failedUpload.statusCode, 400);
     assert.deepEqual(failedUpload.json(), {
       error: {
@@ -48,11 +51,11 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
       },
     });
 
-    const days = await app.inject({ method: "GET", url: "/api/days" });
+    const days = await inject({ method: "GET", url: "/api/days" });
     const dayList = days.json() as { days: Array<{ id: string; dayNumber: number; rowCount: number }> };
     assert.deepEqual(dayList.days.map((day) => ({ dayNumber: day.dayNumber, rowCount: day.rowCount })), [{ dayNumber: 1, rowCount: 2 }]);
 
-    const started = await app.inject({
+    const started = await inject({
       method: "POST",
       url: "/api/study/sessions",
       payload: { targetDayId: uploadBody.day.id },
@@ -62,16 +65,16 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
     assert.equal(session.cards.length, 2);
 
     const listUrl = `/api/study/sessions/${session.session.id}/days/${uploadBody.day.id}/cards`;
-    const initialList = await app.inject({ method: "GET", url: listUrl });
+    const initialList = await inject({ method: "GET", url: listUrl });
     assert.equal(initialList.statusCode, 200);
     assert.deepEqual(initialList.json().cards.map((card: { meaning: string; status: string }) => [card.meaning, card.status]), [
       ["침착한", "unseen"], ["평온한", "unseen"],
     ]);
-    assert.equal((await app.inject({ method: "GET", url: `/api/study/sessions/invalid/days/${uploadBody.day.id}/cards` })).statusCode, 400);
-    assert.equal((await app.inject({ method: "GET", url: `/api/study/sessions/${crypto.randomUUID()}/days/${uploadBody.day.id}/cards` })).statusCode, 404);
+    assert.equal((await inject({ method: "GET", url: `/api/study/sessions/invalid/days/${uploadBody.day.id}/cards` })).statusCode, 400);
+    assert.equal((await inject({ method: "GET", url: `/api/study/sessions/${crypto.randomUUID()}/days/${uploadBody.day.id}/cards` })).statusCode, 404);
 
     for (const [index, card] of session.cards.entries()) {
-      const attempt = await app.inject({
+      const attempt = await inject({
         method: "POST",
         url: `/api/study/sessions/${session.session.id}/attempts`,
         payload: {
@@ -87,19 +90,19 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
       assert.equal(attempt.statusCode, 200);
     }
 
-    const secondRound = await app.inject({ method: "POST", url: `/api/study/sessions/${session.session.id}/rounds` });
+    const secondRound = await inject({ method: "POST", url: `/api/study/sessions/${session.session.id}/rounds` });
     assert.equal(secondRound.statusCode, 200);
     const secondRoundBody = secondRound.json() as { completed: boolean; roundNumber: number; cards: Array<{ id: string }> };
     assert.equal(secondRoundBody.completed, false);
     assert.equal(secondRoundBody.roundNumber, 2);
     assert.equal(secondRoundBody.cards.length, 1);
-    const reviewedList = (await app.inject({ method: "GET", url: listUrl })).json();
+    const reviewedList = (await inject({ method: "GET", url: listUrl })).json();
     assert.equal(reviewedList.cards.length, 2); // Passed cards remain visible in the full DAY list.
     for (const card of reviewedList.cards) {
       assert.equal(card.status, card.id === session.cards[0]!.id ? "unknown" : "known");
     }
 
-    const finalAttempt = await app.inject({
+    const finalAttempt = await inject({
       method: "POST",
       url: `/api/study/sessions/${session.session.id}/attempts`,
       payload: {
@@ -114,35 +117,35 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
     });
     assert.equal(finalAttempt.statusCode, 200);
 
-    const completed = await app.inject({ method: "POST", url: `/api/study/sessions/${session.session.id}/rounds` });
+    const completed = await inject({ method: "POST", url: `/api/study/sessions/${session.session.id}/rounds` });
     const completedBody = completed.json() as { completed: boolean; session: { knownCount: number; unknownCount: number; roundsCompleted: number } };
     assert.equal(completed.statusCode, 200);
     assert.equal(completedBody.completed, true);
     assert.equal(completedBody.session.knownCount, 2);
     assert.equal(completedBody.session.unknownCount, 1);
     assert.equal(completedBody.session.roundsCompleted, 2);
-    assert.ok((await app.inject({ method: "GET", url: listUrl })).json().cards.every((card: { status: string }) => card.status === "known"));
-    const repeated = (await app.inject({ method: "POST", url: "/api/study/sessions", payload: { repeatOfSessionId: session.session.id } })).json();
-    const repeatedList = (await app.inject({ method: "GET", url: `/api/study/sessions/${repeated.session.id}/days/${uploadBody.day.id}/cards` })).json();
+    assert.ok((await inject({ method: "GET", url: listUrl })).json().cards.every((card: { status: string }) => card.status === "known"));
+    const repeated = (await inject({ method: "POST", url: "/api/study/sessions", payload: { repeatOfSessionId: session.session.id } })).json();
+    const repeatedList = (await inject({ method: "GET", url: `/api/study/sessions/${repeated.session.id}/days/${uploadBody.day.id}/cards` })).json();
     assert.ok(repeatedList.cards.every((card: { status: string }) => card.status === "unseen"));
-    assert.ok((await app.inject({ method: "GET", url: listUrl })).json().cards.every((card: { status: string }) => card.status === "known"));
+    assert.ok((await inject({ method: "GET", url: listUrl })).json().cards.every((card: { status: string }) => card.status === "known"));
 
-    const day2Response = await app.inject(multipartRequest("day2.csv", "word,meaning\nsecond,둘째\n"));
-    const day3Response = await app.inject(multipartRequest("day3.csv", "word,meaning\nthird-a,셋째 A\nthird-b,셋째 B\n"));
+    const day2Response = await inject(multipartRequest("day2.csv", "word,meaning\nsecond,둘째\n"));
+    const day3Response = await inject(multipartRequest("day3.csv", "word,meaning\nthird-a,셋째 A\nthird-b,셋째 B\n"));
     assert.equal(day2Response.statusCode, 201);
     assert.equal(day3Response.statusCode, 201);
     const day3 = day3Response.json() as { day: { id: string } };
 
-    const grouped = await app.inject({ method: "POST", url: "/api/study/sessions", payload: { targetDayId: day3.day.id } });
+    const grouped = await inject({ method: "POST", url: "/api/study/sessions", payload: { targetDayId: day3.day.id } });
     const groupedBody = grouped.json() as { session: { id: string }; cards: Array<{ id: string }> };
     assert.equal(grouped.statusCode, 201);
     assert.equal(groupedBody.cards.length, 3);
-    const excludedDay = (await app.inject({ method: "GET", url: `/api/study/sessions/${groupedBody.session.id}/days/${uploadBody.day.id}/cards` })).json();
+    const excludedDay = (await inject({ method: "GET", url: `/api/study/sessions/${groupedBody.session.id}/days/${uploadBody.day.id}/cards` })).json();
     assert.equal(excludedDay.cards.length, 2);
     assert.ok(excludedDay.cards.every((card: { status: string }) => card.status === "not_in_session"));
 
     for (const [index, card] of groupedBody.cards.entries()) {
-      const attempt = await app.inject({
+      const attempt = await inject({
         method: "POST",
         url: `/api/study/sessions/${groupedBody.session.id}/attempts`,
         payload: {
@@ -153,7 +156,7 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
       assert.equal(attempt.statusCode, 200);
     }
 
-    const groupedRound = await app.inject({ method: "POST", url: `/api/study/sessions/${groupedBody.session.id}/rounds` });
+    const groupedRound = await inject({ method: "POST", url: `/api/study/sessions/${groupedBody.session.id}/rounds` });
     const groupedRoundBody = groupedRound.json() as { cards: Array<{ id: string }> };
     const reReviewDays = await sql<{ id: string; day_number: number }[]>`
       SELECT cards.id, days.day_number FROM cards JOIN days ON days.id = cards.day_id
@@ -166,19 +169,21 @@ test("uploads cards atomically and completes an unknown-card review round", { sk
   }
 });
 
-test("imports headerless xlsx row 1 and keeps existing rows and positive-row validation", { skip: !databaseUrl, timeout: 20_000 }, async () => {
+test("imports headerless xlsx row 1 and keeps existing rows and positive-row validation", { timeout: 20_000 }, async () => {
   const sql = createDatabase(databaseUrl);
   await applyMigrations(sql);
   await applyMigrations(sql); // Already-applied migrations must be safe to run again.
   await sql.unsafe("TRUNCATE jobs, users CASCADE");
-  const app = buildApp(sql, undefined, null);
+  const app = buildApp(sql, undefined, testConfig);
+  const cookie = await loginOwner(app, sql);
+  const inject = (options: import("fastify").InjectOptions) => app.inject({ ...options, headers: { cookie, origin: testConfig.origin, ...options.headers } });
   try {
-    const original = await app.inject(multipartRequest("header.csv", "word,meaning\nsteady,꾸준한\n"));
+    const original = await inject(multipartRequest("header.csv", "word,meaning\nsteady,꾸준한\n"));
     assert.equal(original.statusCode, 201);
     const originalId = original.json().day.id as string;
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["resume", "이력서"], ["vacancy", "공석"]]), "Words");
-    const uploaded = await app.inject(multipartRequest("headerless.xlsx", XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })));
+    const uploaded = await inject(multipartRequest("headerless.xlsx", XLSX.write(workbook, { type: "buffer", bookType: "xlsx" })));
     assert.equal(uploaded.statusCode, 201);
     const dayId = uploaded.json().day.id as string;
     const cards = await sql<{ source_row: number; term: string }[]>`SELECT source_row, term FROM cards WHERE day_id = ${dayId} ORDER BY source_row`;

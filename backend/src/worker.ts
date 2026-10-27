@@ -1,3 +1,4 @@
+import { cleanAuth } from "./modules/auth/index.js";
 import { randomUUID } from "node:crypto";
 import { processExampleJob, markExampleFailed } from "./modules/examples/examples.worker.js";
 import { processPushJob, scheduleNotifications } from "./modules/notifications/notifications.worker.js";
@@ -11,9 +12,14 @@ let stopping = false;
 let activeTick: Promise<void> | undefined;
 let intervalId: ReturnType<typeof setInterval> | undefined;
 
+let lastAuthCleanup = 0;
 async function tick() {
   await logContext.run({ log: log.child({ tickId: randomUUID() }) }, async () => {
     try {
+      if (Date.now() - lastAuthCleanup >= 600_000) {
+        lastAuthCleanup = Date.now();
+        try { await cleanAuth(sql); } catch (err) { log.error({ event: "auth.cleanup_failed", err }, "Auth cleanup failed"); }
+      }
       setStage("worker.recover_stale_jobs");
       await recoverStaleJobs(sql);
       setStage("worker.schedule_notifications");

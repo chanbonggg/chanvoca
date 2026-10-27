@@ -22,7 +22,7 @@ async function forward(request: Request) {
     target.pathname = url.pathname;
     target.search = url.search;
     const headers = new Headers();
-    for (const name of ["content-type", "accept", "authorization", "cookie", "user-agent"]) {
+    for (const name of ["content-type", "accept", "authorization", "cookie", "user-agent", "origin", "x-chanvoca-user"]) {
       const value = request.headers.get(name);
       if (value) headers.set(name, value);
     }

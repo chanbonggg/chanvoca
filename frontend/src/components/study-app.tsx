@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { NotificationSettings } from "@/components/notification-settings";
-import { api, messageFrom } from "@/lib/api";
+import { api, ApiError, messageFrom } from "@/lib/api";
 import { clientLog, reportError } from "@/lib/client-log";
 
 type ExampleStatus = "pending" | "processing" | "ready" | "failed";
@@ -50,9 +50,10 @@ type SessionResponse = {
 
 type Phase = "loading" | "empty" | "studying" | "complete" | "error";
 
-const activeSessionKey = "chanvoca:active-session";
 
-export function StudyApp({ onLogout }: { onLogout: () => void }) {
+
+export function StudyApp({ onLogout, userId, loginId }: { onLogout: () => void; userId: string; loginId: string }) {
+  const activeSessionKey = `chanvoca:${userId}:active-session`;
   const [menuOpen, setMenuOpen] = useState(false);
   const [listDayId, setListDayId] = useState<string | null>(null);
   const [days, setDays] = useState<Day[]>([]);
@@ -89,9 +90,14 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
   }, []);
 
   const advanceRound = useCallback(async (sessionId: string) => {
-    const data = await api<{ completed: boolean } & SessionResponse>(`/api/study/sessions/${sessionId}/rounds`, {
-      method: "POST",
-    });
+    let data: { completed: boolean } & SessionResponse;
+    try {
+      data = await api<typeof data>(`/api/study/sessions/${sessionId}/rounds`, { method: "POST" });
+    } catch (error) {
+      if (!(error instanceof ApiError) || !["ROUND_INCOMPLETE", "SESSION_NOT_FOUND"].includes(error.errorCode)) throw error;
+      const latest = await api<SessionResponse>(`/api/study/sessions/${sessionId}`);
+      data = { ...latest, completed: latest.session.status === "completed" };
+    }
 
     clientLog("info", "study.round_advanced", { sessionId, roundNumber: data.roundNumber });
     if (data.completed) {
@@ -103,7 +109,7 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
     }
 
     applySession(data);
-  }, [applySession]);
+  }, [activeSessionKey, applySession]);
 
   const loadSession = useCallback(async (sessionId: string) => {
     clientLog("info", "study.resume_started", { sessionId });
@@ -120,7 +126,7 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
     setPhase("studying");
 
     if (data.roundComplete) await advanceRound(data.session.id);
-  }, [advanceRound, applySession]);
+  }, [activeSessionKey, advanceRound, applySession]);
 
   const startSession = useCallback(async (targetDayId?: string, repeatOfSessionId?: string) => {
     setPhase("loading");
@@ -139,7 +145,7 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
       setErrorMessage(messageFrom(error));
       setPhase("error");
     }
-  }, [applySession]);
+  }, [activeSessionKey, applySession]);
 
   const loadDays = useCallback(async () => {
     setPhase("loading");
@@ -174,7 +180,7 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
       setErrorMessage(messageFrom(error));
       setPhase("error");
     }
-  }, [loadSession, startSession]);
+  }, [activeSessionKey, loadSession, startSession]);
 
   const submitResult = useCallback(async (result: Result) => {
     if (!session || !currentCard || savingRef.current) return;
@@ -215,6 +221,10 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
         await advanceRound(session.id);
       }
     } catch (error) {
+      if (error instanceof ApiError && ["ROUND_MISMATCH", "CARD_MISMATCH", "SESSION_NOT_FOUND"].includes(error.errorCode)) {
+        try { await loadSession(session.id); return; }
+        catch (cause) { error = cause; }
+      }
       reportError("study.attempt_failed", error, { stage: "study.attempt" });
       setErrorMessage(messageFrom(error));
       setPhase("error");
@@ -222,7 +232,7 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
       savingRef.current = false;
       setSaving(false);
     }
-  }, [advanceRound, cardIndex, cards.length, currentCard, roundNumber, session]);
+  }, [advanceRound, cardIndex, cards.length, currentCard, loadSession, roundNumber, session]);
 
   useEffect(() => {
     const loadId = window.setTimeout(() => void loadDays(), 0);
@@ -390,7 +400,7 @@ export function StudyApp({ onLogout }: { onLogout: () => void }) {
           {session && <section className="menu-section"><h3>DAY 전체 단어 확인</h3><div className="day-list">{days.map((day) => <button className="ghost-action" type="button" key={day.id} disabled={saving} onClick={() => setListDayId(day.id)}>Day {day.dayNumber} 전체 단어 보기</button>)}</div></section>}
           <section className="menu-section"><h3>단어 가져오기</h3><label className={`upload-control ${uploading ? "is-uploading" : ""}`}><span>{uploading ? "업로드 중…" : "엑셀 또는 CSV 선택"}</span><small>.xlsx, .xls, .csv</small><input type="file" accept=".xlsx,.xls,.csv" disabled={uploading} onChange={(event) => { void uploadFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><p className="helper-text">헤더가 있으면 첫 행의 word/meaning 또는 단어/뜻을 인식해 제외합니다. 헤더 없이 첫 행부터 단어를 입력해도 됩니다. 빈 행은 건너뛰지만 단어 또는 뜻이 비어 있으면 파일 전체가 저장되지 않고 오류 행을 알려드립니다. CSV는 UTF-8만 지원합니다.</p>{uploadMessage && <p className="upload-message" role="alert">{uploadMessage}</p>}</section>
           <NotificationSettings />
-          <section className="menu-section"><button className="ghost-action" type="button" onClick={onLogout}>로그아웃</button></section>
+          <section className="menu-section"><button className="ghost-action" type="button" onClick={onLogout}>{loginId} · 로그아웃</button></section>
         </aside>
       </div>}
       {listDayId && session && <DayWords key={`${session.id}:${listDayId}`} sessionId={session.id} dayId={listDayId} onClose={() => setListDayId(null)} />}

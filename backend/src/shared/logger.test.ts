@@ -1,3 +1,4 @@
+import { testConfig } from "../test-support.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildApp } from "../app.js";
@@ -9,8 +10,10 @@ import webpush from "web-push";
 test("request context survives awaits, stays isolated, and excludes sensitive request data", async () => {
   const lines: string[] = [];
   const log = createLogger("test", { write: (line) => { lines.push(line); } });
+  log.level = "info";
   log.level = "debug";
-  const app = buildApp(undefined, log, null);
+  const authSql = Object.assign(async () => [{ id: "test-user", login_id: "tester", auth_session_id: "test-session" }], { end: async () => {} }) as unknown as Database;
+  const app = buildApp(authSql, log, testConfig);
   app.post<{ Params: { id: string } }>("/probe/:id", async (request) => {
     setStage(`probe.${request.params.id}`);
     await new Promise((resolve) => setTimeout(resolve, request.params.id === "one" ? 10 : 1));
@@ -21,7 +24,7 @@ test("request context survives awaits, stays isolated, and excludes sensitive re
   try {
     const responses = await Promise.all(["one", "two"].map((id) => app.inject({
       method: "POST", url: `/probe/${id}?token=secret-query`,
-      headers: { authorization: "Bearer secret-auth", cookie: "secret-cookie", "x-request-id": "spoofed" },
+      headers: { authorization: "Bearer secret-auth", cookie: "chanvoca_session=" + "a".repeat(43), origin: testConfig.origin, "x-request-id": "spoofed" },
       payload: { password: "secret-body" },
     })));
     assert.deepEqual(responses.map((response) => response.statusCode), [500, 200]);
@@ -43,14 +46,15 @@ test("request context survives awaits, stays isolated, and excludes sensitive re
 test("handled readiness failures and application rejections are logged", async () => {
   const lines: string[] = [];
   const log = createLogger("test", { write: (line) => { lines.push(line); } });
+  log.level = "info";
   const sql = Object.assign(async () => { throw Object.assign(new Error("secret-db-value"), { code: "08006" }); }, { end: async () => {} }) as unknown as Database;
-  const app = buildApp(sql, log, null);
+  const app = buildApp(sql, log, testConfig);
   try {
     assert.equal((await app.inject("/api/ready")).statusCode, 503);
-    assert.equal((await app.inject({ method: "POST", url: "/api/push/subscriptions", payload: {} })).statusCode, 400);
+    assert.equal((await app.inject({ method: "POST", url: "/api/push/subscriptions", headers: { origin: testConfig.origin }, payload: {} })).statusCode, 401);
     const records = lines.map((line) => JSON.parse(line));
     assert.equal(records.find((record) => record.event === "health.database_failed").err.code, "08006");
-    assert.ok(records.some((record) => record.event === "http.rejected" && record.errorCode === "INVALID_PUSH_SUBSCRIPTION"));
+    assert.ok(records.some((record) => record.event === "http.rejected" && record.errorCode === "AUTH_REQUIRED"));
     assert.doesNotMatch(lines.join(""), /secret-db-value/);
   } finally { await app.close(); }
 });
@@ -73,6 +77,7 @@ test("driver error properties and messages never leak into diagnostics", () => {
 test("push provider failures retain job context, source stack, and disable expired subscriptions", async (t) => {
   const lines: string[] = [];
   const log = createLogger("test", { write: (line) => { lines.push(line); } }).child({ jobId: "test-job", traceId: "test-trace" });
+  log.level = "info";
   const previous = ["VAPID_SUBJECT", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY"].map((key) => [key, process.env[key]] as const);
   for (const [key] of previous) process.env[key] = "secret-vapid";
   t.after(() => { for (const [key, value] of previous) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
@@ -81,9 +86,9 @@ test("push provider failures retain job context, source stack, and disable expir
   let calls = 0;
   const sql = (async () => {
     calls++;
-    return calls === 1 ? [{ id: "subscription", endpoint: "secret-endpoint", p256dh: "secret-key", auth: "secret-auth" }] : [];
+    return calls === 1 ? [{ id: "subscription", endpoint: "https://fcm.googleapis.com/fcm/send/test", p256dh: "secret-key", auth: "secret-auth" }] : [];
   }) as unknown as Database;
-  const result = await logContext.run({ log }, () => processPushJob(sql, { subscriptionId: "subscription", title: "secret-title", body: "secret-body", url: "/" }));
+  const result = await logContext.run({ log }, () => processPushJob(sql, { subscriptionId: "11111111-1111-4111-8111-111111111111", userId: "22222222-2222-4222-8222-222222222222", authSessionId: "33333333-3333-4333-8333-333333333333", title: "secret-title", body: "secret-body", url: "/" }));
   assert.equal(result.completed, false);
   if (!result.completed) {
     assert.equal(result.error.code, "PUSH_HTTP_410");

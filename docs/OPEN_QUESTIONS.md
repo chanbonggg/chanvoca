@@ -5,7 +5,7 @@
 ## 확정된 사항
 
 - 개인 서버 한 대에 self-hosting한다.
-- 초기 앱 로그인은 만들지 않는다.
+- 계정별 로그인과 일회용 초대 가입을 사용한다.
 - CSV는 UTF-8과 BOM UTF-8만 지원한다. CP949 자동 감지는 하지 않는다.
 - 오프라인 학습은 지원하지 않는다.
 - LLM 공급자는 Groq다.
@@ -22,7 +22,7 @@
 4. 접속 범위가 집 안 LAN 전용인지, 외부에서도 접속해야 하는지?
 5. 외부 접속이 필요하면 VPN/Tailscale과 리버스 프록시 인증 중 어느 방식을 선호하는지?
 
-앱 로그인이 없으므로 4~5번은 실제 공개 전 반드시 확정한다.
+실제 HTTPS Origin과 프록시·IP 신뢰 경로는 운영 전 확정한다.
 
 ## 파일 제한 질문
 
@@ -48,7 +48,7 @@
 답변 전까지는 다음을 기준으로 구현 계획을 유지한다.
 
 - 개인 서버 Docker Compose에서 web, worker, PostgreSQL 실행
-- 로그인 없는 단일 owner
+- 계정별 인증과 사용자별 데이터
 - Groq + `openai/gpt-oss-120b`
 - UTF-8/BOM UTF-8 CSV, 첫 sheet, 첫 두 열, 10 MiB/5,000행
 - reveal 순간 timer 정지, timeout reveal 1.2초, 백그라운드에서도 deadline 진행

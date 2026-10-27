@@ -1,26 +1,31 @@
+import { issueSession } from "../auth/auth.js";
+import { testDatabaseUrl } from "../../test-support.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createDatabase } from "../../shared/db.js";
 import { applyMigrations } from "../../shared/migrations.js";
-import { getOwnerId } from "../system/owner.js";
 import { localClock, scheduleNotifications } from "./notifications.worker.js";
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
+const databaseUrl = testDatabaseUrl();
 
-test("schedules one daily push job per subscription", { skip: !databaseUrl, timeout: 20_000 }, async () => {
+test("schedules one daily push job per subscription", { timeout: 20_000 }, async () => {
   const sql = createDatabase(databaseUrl);
   await applyMigrations(sql);
   await sql.unsafe("TRUNCATE jobs, users CASCADE");
 
   try {
-    const ownerId = await getOwnerId(sql);
+    const [owner] = await sql<{ id: string }[]>`INSERT INTO users (display_name) VALUES ('notification_test') RETURNING id`;
+    const ownerId = owner.id;
+    await issueSession(sql, ownerId);
+    const authSessions = await sql<{ id: string }[]>`SELECT id FROM auth_sessions WHERE user_id = ${ownerId}`;
     const now = new Date("2026-09-03T12:34:00.000Z");
     const local = localClock(now, "Asia/Seoul");
     await sql`
       INSERT INTO push_subscriptions ${sql({
         user_id: ownerId,
-        endpoint: "https://push.example.test/subscription",
+        auth_session_id: authSessions[0].id,
+        endpoint: "https://fcm.googleapis.com/fcm/send/subscription",
         p256dh: "test-p256dh",
         auth: "test-auth",
       })}

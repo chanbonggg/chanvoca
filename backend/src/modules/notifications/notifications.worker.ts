@@ -1,3 +1,4 @@
+import { isPushEndpoint } from "./push-endpoint.js";
 import { setStage, currentLog, logContext } from "../../shared/logger.js";
 import webpush from "web-push";
 
@@ -6,6 +7,8 @@ import { enqueueJob } from "../../shared/jobs.js";
 
 type PushJobPayload = {
   subscriptionId: string;
+  userId: string;
+  authSessionId: string;
   title: string;
   body: string;
   url: string;
@@ -37,9 +40,11 @@ export async function processPushJob(sql: Database, payload: unknown) {
     FROM push_subscriptions
     WHERE id = ${job.subscriptionId}
       AND disabled_at IS NULL
+      AND user_id = ${job.userId} AND auth_session_id = ${job.authSessionId}
+      AND EXISTS (SELECT 1 FROM auth_sessions WHERE id = push_subscriptions.auth_session_id AND user_id = push_subscriptions.user_id AND revoked_at IS NULL AND expires_at > now())
   `;
   const subscription = subscriptions[0];
-  if (!subscription) {
+  if (!subscription || !isPushEndpoint(subscription.endpoint)) {
     currentLog().info({ event: "push.skipped", subscriptionId: job.subscriptionId, reason: "missing_or_disabled" }, "Push job skipped");
     return { completed: true } as const;
   }
@@ -104,14 +109,17 @@ export async function scheduleNotifications(sql: Database, now = new Date()) {
       if (!claimed[0]) return null;
 
       setStage("notifications.load_subscriptions");
-      const subscriptions = await transaction<{ id: string }[]>`
-        SELECT id
+      const subscriptions = await transaction<{ id: string; auth_session_id: string }[]>`
+        SELECT id, auth_session_id
         FROM push_subscriptions
         WHERE user_id = ${setting.user_id}
           AND disabled_at IS NULL
+          AND EXISTS (SELECT 1 FROM auth_sessions WHERE id = push_subscriptions.auth_session_id AND user_id = push_subscriptions.user_id AND revoked_at IS NULL AND expires_at > now())
       `;
-      await Promise.all(subscriptions.map(({ id }) => enqueueJob(transaction, "send_push", `daily:${id}:${local.date}`, {
+      await Promise.all(subscriptions.map(({ id, auth_session_id }) => enqueueJob(transaction, "send_push", `daily:${id}:${auth_session_id}:${local.date}`, {
         subscriptionId: id,
+        userId: setting.user_id,
+        authSessionId: auth_session_id,
         title: "오늘의 단어 복습",
         body: "오늘 계획을 열어 학습을 시작하세요.",
         url: "/?source=notification",
@@ -133,9 +141,10 @@ function configureVapid() {
 function parsePushPayload(value: unknown): PushJobPayload | null {
   if (!value || typeof value !== "object") return null;
   const payload = value as Record<string, unknown>;
-  return typeof payload.subscriptionId === "string" && typeof payload.title === "string" &&
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return typeof payload.subscriptionId === "string" && typeof payload.userId === "string" && typeof payload.authSessionId === "string" && uuid.test(payload.subscriptionId) && uuid.test(payload.userId) && uuid.test(payload.authSessionId) && typeof payload.title === "string" &&
     typeof payload.body === "string" && typeof payload.url === "string"
-    ? { subscriptionId: payload.subscriptionId, title: payload.title, body: payload.body, url: payload.url }
+    ? { subscriptionId: payload.subscriptionId, userId: payload.userId, authSessionId: payload.authSessionId, title: payload.title, body: payload.body, url: payload.url }
     : null;
 }
 

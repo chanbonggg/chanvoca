@@ -1,26 +1,23 @@
 # HTTP API 설계
 
-모든 응답은 `backend/`의 Fastify route가 처리한다. 응답은 JSON이며 업로드만 `multipart/form-data`를 받는다. 초기 버전에는 앱 로그인이 없고 모든 API가 DB의 단일 `owner` 범위에서 동작한다. 사용자 ID는 요청 body에서 받지 않는다.
+모든 데이터 API는 Fastify의 인증 세션에서 확인한 사용자 ID로 처리한다. 클라이언트의 userId는 소유자를 바꾸지 않는다. 응답은 JSON, 업로드는 multipart/form-data다.
 
-이 API는 신뢰할 수 있는 개인 네트워크 또는 별도 접근 제한 뒤에서만 실행한다. 공인 인터넷에 직접 공개하는 배포로 바뀌면 기능 추가보다 인증 도입을 먼저 한다.
+## 인증·공통 규칙
 
-## 공통 규칙
-
-- 성공: 필요한 최소 데이터와 적절한 2xx 상태를 반환한다.
-- 검증 실패: `400`과 `{ "error": { "code", "message", "fields?" } }`.
-- 충돌/중복 요청: `409`.
-- 업로드 크기 초과: `413`; 지원하지 않는 형식: `415`.
-- 예상하지 못한 오류: 상세 내부 정보를 감춘 `500`.
-- 상태 변경 요청의 입력 형식은 route별로 검증한다. 로그인 없는 초기 버전이므로 운영에서는 반드시 VPN/Tailscale 또는 리버스 프록시 인증으로 접근을 제한한다.
-- 클라이언트가 재시도할 수 있는 결과 저장 API는 `idempotencyKey`를 요구한다.
-
-## 단일 owner 범위
-
-- 앱 시작 시 `owner` 행 하나를 보장한다.
-- API route는 공통 helper로 owner ID를 조회한다.
-- 클라이언트가 전달한 user ID를 신뢰하지 않는다.
-- 로그인·로그아웃·세션 API는 만들지 않는다.
-- 향후 인증이 필요해지면 owner 데이터에 계정을 연결하고 보호 middleware를 추가한다.
+- 공개 경로: health, ready, auth/session, auth/login, auth/register, auth/logout. 나머지는 인증이 필요하다.
+- 변경 요청은 정확한 APP_ORIGIN이 필요하다. 누락·다른 Origin은 403이다.
+- 아이디는 영문 소문자·숫자·밑줄 3~32자, 비밀번호는 유니코드 15~128자다. 비밀번호는 trim하지 않는다.
+- 로그인 실패는 존재하지 않는 계정과 틀린 비밀번호 모두 같은 401이다. 유효한 세션 없는 데이터 요청도 401이다.
+- 타인의 Day·학습 세션 ID는 404, 잘못된 ID 형식은 400이다. 타인의 상태를 변경하거나 작업을 생성하지 않는다.
+- 중복 ID 등 충돌은 409, 크기 초과는 413, 요청·카드 한도는 429와 Retry-After다. 내부 오류 내용은 반환하지 않는다.
+- POST /api/auth/login: {loginId,password}, 200과 {authenticated:true,user:{id,loginId}}, HttpOnly 인증 쿠키.
+- POST /api/auth/register: {loginId,password,inviteCode}, 성공 201. 초대 소비·사용자 생성·인증 발급은 원자적이다.
+- GET /api/auth/session: {authenticated,user}. 세션이 없거나 만료되면 false/null이며 토큰은 반환하지 않는다.
+- POST /api/auth/logout: 현재 인증 세션 무효화와 쿠키 삭제. 반복해도 안전하다.
+- 로그인 전환 후 지연된 요청을 구분하기 위한 x-chanvoca-user가 인증 사용자와 다르면 409 AUTH_CHANGED다. 이 헤더로 인증할 수는 없다.
+- 업로드 한도는 사용자별 한국 날짜 기준 MAX_DAILY_CARDS다. 초과 시 Day·카드·작업을 저장하지 않는다.
+- 푸시 구독은 현재 인증 세션에 연결되며 이전 계정의 유효한 구독을 빼앗을 수 없다. 로그아웃·만료 후 신규 발송은 중단된다.
+- 테스트·일일 푸시 작업은 사용자·인증 세션·구독이 일치할 때만 발송한다. 기존 형식의 대기 작업은 발송하지 않는다.
 
 ## Day와 업로드
 

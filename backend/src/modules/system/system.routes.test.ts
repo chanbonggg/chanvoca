@@ -4,7 +4,7 @@ import test from "node:test";
 import { buildApp } from "../../app.js";
 
 test("GET /api/health", async () => {
-  const app = buildApp(undefined, undefined, null);
+  const app = buildApp();
   const response = await app.inject({ method: "GET", url: "/api/health" });
 
   assert.equal(response.statusCode, 200);
