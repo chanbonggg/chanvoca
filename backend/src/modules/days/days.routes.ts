@@ -108,7 +108,7 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database, ma
       `;
       const dayNumber = (latest[0]?.day_number ?? 0) + 1;
       setStage("upload.insert_day");
-      const insertedDays = await transaction<{ id: string }[]>`
+      const insertedDays = await transaction<{ id: string; imported_at: string }[]>`
         INSERT INTO days ${transaction({
           user_id: userId,
           day_number: dayNumber,
@@ -116,7 +116,7 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database, ma
           source_format: parsed.sourceFormat,
           row_count: parsed.cards.length,
         })}
-        RETURNING id
+        RETURNING id, imported_at
       `;
       const dayId = insertedDays[0]!.id;
       setStage("upload.insert_cards");
@@ -144,7 +144,12 @@ export async function registerDaysRoutes(app: FastifyInstance, sql: Database, ma
         ON CONFLICT (kind, dedupe_key) DO NOTHING
       `;
 
-      return { id: dayId, dayNumber, rowCount: cards.length };
+      return {
+        id: dayId, dayNumber, rowCount: cards.length,
+        originalFilename: file.filename.slice(0, 255),
+        importedAt: insertedDays[0]!.imported_at,
+        examples: { ready: 0, pending: cards.length, processing: 0, failed: 0 },
+      };
     });
 
     if ("limited" in day) return reply.header("retry-after", day.retry).code(429).send(errorPayload("DAILY_CARD_LIMIT", "오늘의 업로드 한도에 도달했습니다. 내일 다시 시도하세요."));

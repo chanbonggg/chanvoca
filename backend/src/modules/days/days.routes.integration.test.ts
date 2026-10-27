@@ -24,6 +24,7 @@ test("uploads cards atomically and completes an unknown-card review round", { ti
     assert.equal(uploadBody.day.dayNumber, 1);
     assert.equal(uploadBody.day.rowCount, 2);
     assert.equal(uploadBody.exampleJobsQueued, 2);
+    assert.deepEqual(uploaded.json().day.examples, { ready: 0, pending: 2, processing: 0, failed: 0 });
     const savedCards = await sql<{ term: string; meaning: string }[]>`
       SELECT term, meaning
       FROM cards
@@ -52,6 +53,7 @@ test("uploads cards atomically and completes an unknown-card review round", { ti
     });
 
     const days = await inject({ method: "GET", url: "/api/days" });
+    assert.deepEqual(uploaded.json().day, days.json().days[0]);
     const dayList = days.json() as { days: Array<{ id: string; dayNumber: number; rowCount: number }> };
     assert.deepEqual(dayList.days.map((day) => ({ dayNumber: day.dayNumber, rowCount: day.rowCount })), [{ dayNumber: 1, rowCount: 2 }]);
 

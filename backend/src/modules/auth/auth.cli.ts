@@ -12,7 +12,7 @@ async function passwordInput() {
     }
     return input.replace(/\r?\n$/, "");
   }
-  process.stderr.write("비밀번호 (15~128자): ");
+  process.stderr.write("비밀번호 (6~128자): ");
   process.stdin.setRawMode(true);
   process.stdin.setEncoding("utf8");
   process.stdin.resume();

@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: chanvoca
       POSTGRES_PASSWORD: chanvoca
     ports:
-      - "5432:5432"
+      - "5434:5432"
     volumes:
       - chanvoca_postgres:/var/lib/postgresql/data
     healthcheck:

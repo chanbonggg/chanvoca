@@ -23,7 +23,7 @@ export function loginId(value: unknown): string | null {
   return /^[a-z0-9_]{3,32}$/.test(normalized) ? normalized : null;
 }
 export function validPassword(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 256 && [...value].length >= 15 && [...value].length <= 128;
+  return typeof value === "string" && value.length <= 256 && [...value].length >= 6 && [...value].length <= 128;
 }
 // Bound scrypt memory even when many distinct accounts authenticate at once.
 let activeHashes = 0;
@@ -34,7 +34,7 @@ async function derive(password: string, salt: Buffer) {
   finally { activeHashes--; }
 }
 export async function hashPassword(password: string) {
-  if (!validPassword(password)) throw new Error("Password must contain 15–128 characters.");
+  if (!validPassword(password)) throw new Error("Password must contain 6–128 characters.");
   const salt = randomBytes(16);
   return `scrypt:131072:8:1:${salt.toString("hex")}:${(await derive(password, salt)).toString("hex")}`;
 }
