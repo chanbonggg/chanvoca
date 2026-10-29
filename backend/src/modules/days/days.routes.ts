@@ -1,3 +1,4 @@
+import { validVocabulary } from "./vocabulary.js";
 import { setStage } from "../../shared/logger.js";
 import type { FastifyInstance } from "fastify";
 
@@ -18,6 +19,29 @@ type DayListRow = {
 };
 
 export async function registerDaysRoutes(app: FastifyInstance, sql: Database, maxDailyCards: number) {
+  app.patch<{ Params: { dayId: string; cardId: string }; Body: unknown }>("/:dayId/cards/:cardId", async (request, reply) => {
+    const { dayId, cardId } = request.params;
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuid.test(dayId) || !uuid.test(cardId)) return reply.code(400).send(errorPayload("INVALID_ID", "올바른 Day와 단어 ID가 필요합니다."));
+    const body = request.body;
+    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => !["term", "meaning"].includes(key))) {
+      return reply.code(400).send(errorPayload("INVALID_INPUT", "단어와 뜻만 수정할 수 있습니다."));
+    }
+    const input = body as { term?: unknown; meaning?: unknown };
+    const term = typeof input.term === "string" ? input.term.trim() : input.term;
+    const meaning = typeof input.meaning === "string" ? input.meaning.trim() : input.meaning;
+    if (!validVocabulary(term, meaning)) return reply.code(400).send(errorPayload("INVALID_INPUT", "단어는 1~200자, 뜻은 1~1,000자로 입력하세요."));
+    const userId = requestUser(request).id;
+    const rows = await sql<{ id: string; term: string; meaning: string }[]>`
+      UPDATE cards SET term = ${term as string}, meaning = ${meaning as string}
+      FROM days WHERE cards.id = ${cardId} AND cards.day_id = days.id
+        AND days.id = ${dayId} AND days.user_id = ${userId}
+      RETURNING cards.id, cards.term, cards.meaning
+    `;
+    if (!rows[0]) return reply.code(404).send(errorPayload("CARD_NOT_FOUND", "단어를 찾을 수 없습니다."));
+    return { card: rows[0] };
+  });
+
   app.get("/", async (request) => {
     const userId = requestUser(request).id;
     setStage("days.list");

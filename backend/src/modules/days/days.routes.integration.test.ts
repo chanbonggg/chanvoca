@@ -211,3 +211,53 @@ function multipartRequest(filename: string, content: string | Buffer) {
     ]),
   };
 }
+
+test("word edits enforce ownership and preserve examples, other cards and study history", async () => {
+  const sql = createDatabase(databaseUrl);
+  await applyMigrations(sql);
+  await sql.unsafe("TRUNCATE jobs, users CASCADE");
+  const app = buildApp(sql, undefined, testConfig);
+  try {
+    const cookie = await loginOwner(app, sql);
+    const headers = { cookie, origin: testConfig.origin };
+    const uploaded = await app.inject({ ...multipartRequest("edit.csv", "word,meaning\napple,사과\napple,사과\n"), headers: { ...headers, ...multipartRequest("", "").headers } });
+    assert.equal(uploaded.statusCode, 201);
+    const dayId = uploaded.json().day.id;
+    const started = await app.inject({ method: "POST", url: "/api/study/sessions", headers, payload: { targetDayId: dayId } });
+    const cardId = started.json().cards[0].id;
+    await sql`UPDATE cards SET example_en = 'An apple.', example_ko = '사과.', example_status = 'ready' WHERE id = ${cardId}`;
+    const url = `/api/days/${dayId}/cards/${cardId}`;
+    const snapshot = async () => ({
+      cards: Array.from(await sql`SELECT * FROM cards ORDER BY id`),
+      sessions: Array.from(await sql`SELECT * FROM study_sessions ORDER BY id`),
+      sessionCards: Array.from(await sql`SELECT * FROM study_session_cards ORDER BY card_id`),
+      attempts: Array.from(await sql`SELECT * FROM study_attempts ORDER BY id`),
+      jobs: Array.from(await sql`SELECT * FROM jobs ORDER BY id`),
+    });
+    assert.equal((await app.inject({ method: "POST", url: `/api/study/sessions/${started.json().session.id}/attempts`, headers, payload: { idempotencyKey: crypto.randomUUID(), cardId, roundNumber: 1, position: 1, result: "known", responseMs: 100, revealedAtMs: 50 } })).statusCode, 200);
+    const before = await snapshot();
+    const patch = (payload: unknown, target = url) => app.inject({ method: "PATCH", url: target, headers, payload: payload as object });
+    for (const payload of [{ term: " ", meaning: "뜻" }, { term: "a".repeat(201), meaning: "뜻" }, { term: "a", meaning: "b".repeat(1001) }, { term: 1, meaning: "뜻" }, { term: "a" }, { term: "a", meaning: "b", example_en: "tampered" }, { term: "a", meaning: "b", userId: "forged" }]) assert.equal((await patch(payload)).statusCode, 400);
+    assert.equal((await patch({ term: "a", meaning: "b" }, `/api/days/${dayId}/cards/invalid`)).statusCode, 400);
+    assert.equal((await patch({ term: "a", meaning: "b" }, `/api/days/${dayId}/cards/${crypto.randomUUID()}`)).statusCode, 404);
+    assert.equal((await app.inject({ method: "PATCH", url, payload: { term: "a", meaning: "b" }, headers: { origin: testConfig.origin } })).statusCode, 401);
+    assert.equal((await app.inject({ method: "PATCH", url, payload: { term: "a", meaning: "b" }, headers: { cookie, origin: "https://evil.test" } })).statusCode, 403);
+    const { issueSession, sessionCookie } = await import("../auth/auth.js");
+    const foreign = (await sql`INSERT INTO users (display_name) VALUES ('other') RETURNING id`)[0].id;
+    const { testHash } = await import("../../test-support.js");
+    await sql`INSERT INTO auth_credentials (user_id, login_id, password_hash) VALUES (${foreign}, 'other', ${await testHash()})`;
+    const token = await sql.begin((tx) => issueSession(tx, foreign));
+    assert.equal((await app.inject({ method: "PATCH", url, payload: { term: "stolen", meaning: "x" }, headers: { origin: testConfig.origin, cookie: sessionCookie(token, testConfig).split(';')[0] } })).statusCode, 404);
+    assert.deepEqual(await snapshot(), before);
+    const result = await patch({ term: " corrected ", meaning: " 수정된 뜻 " });
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(result.json().card, { id: cardId, term: "corrected", meaning: "수정된 뜻" });
+    const expected = structuredClone(before);
+    const changed = expected.cards.find((card) => card.id === cardId)!;
+    changed.term = "corrected"; changed.meaning = "수정된 뜻";
+    assert.deepEqual(await snapshot(), expected);
+    const list = await app.inject({ method: "GET", url: `/api/study/sessions/${started.json().session.id}/days/${dayId}/cards`, headers });
+    assert.equal(list.json().cards.find((card: { id: string }) => card.id === cardId).term, "corrected");
+    assert.equal((await patch({ term: "apple", meaning: "사과" })).statusCode, 200);
+  } finally { await app.close(); }
+});

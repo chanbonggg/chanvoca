@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { WordEditor, type EditedWord } from "@/components/word-editor";
 import { NotificationSettings } from "@/components/notification-settings";
 import { api, ApiError, messageFrom } from "@/lib/api";
 import { clientLog, reportError } from "@/lib/client-log";
@@ -403,7 +404,12 @@ export function StudyApp({ onLogout, userId, loginId }: { onLogout: () => void; 
           <section className="menu-section"><button className="ghost-action" type="button" onClick={onLogout}>{loginId} · 로그아웃</button></section>
         </aside>
       </div>}
-      {listDayId && session && <DayWords key={`${session.id}:${listDayId}`} sessionId={session.id} dayId={listDayId} onClose={() => setListDayId(null)} />}
+      {listDayId && session && <DayWords key={`${session.id}:${listDayId}`} sessionId={session.id} dayId={listDayId} onClose={() => setListDayId(null)} onSaved={(updated) => {
+        const active = timerRef.current.card;
+        const updatedActive = active?.id === updated.id ? { ...active, ...updated } : null;
+        if (updatedActive) timerRef.current.card = updatedActive;
+        setCards((current) => current.map((card) => card.id === updated.id ? updatedActive ?? { ...card, ...updated } : card));
+      }} />}
     </main>
   );
 }
@@ -411,7 +417,7 @@ export function StudyApp({ onLogout, userId, loginId }: { onLogout: () => void; 
 type DayWord = { id: string; term: string; meaning: string; sourceRow: number; status: "known" | "unknown" | "timeout" | "unseen" | "not_in_session" };
 const wordStatusLabels = { known: "알았음", unknown: "몰랐음", timeout: "시간 초과", unseen: "아직 안 봄", not_in_session: "이번 학습 대상 아님" };
 
-function DayWords({ sessionId, dayId, onClose }: { sessionId: string; dayId: string; onClose: () => void }) {
+function DayWords({ sessionId, dayId, onClose, onSaved }: { sessionId: string; dayId: string; onClose: () => void; onSaved: (card: EditedWord) => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [data, setData] = useState<{ dayNumber: number; cards: DayWord[] } | null>(null);
   const [error, setError] = useState("");
@@ -434,7 +440,10 @@ function DayWords({ sessionId, dayId, onClose }: { sessionId: string; dayId: str
     {error ? <div role="alert"><p>{error}</p><button className="ghost-action" type="button" onClick={() => { setError(""); setRetry((value) => value + 1); }}>다시 불러오기</button></div> : !data ? <p role="status">단어를 불러오는 중…</p> : <>
       <p className="word-list-summary">전체 {data.cards.length}개 · 알았음 {data.cards.filter((card) => card.status === "known").length}개</p>
       {data.cards.length === 0 ? <p>저장된 단어가 없습니다.</p> : <ol className="day-words-list">{data.cards.map((card) => <li key={card.id}>
-        <div className="word-list-content"><strong>{card.term}</strong><p>{card.meaning}</p><small>원본 {card.sourceRow}행</small></div>
+        <div className="word-list-content"><strong>{card.term}</strong><p>{card.meaning}</p><small>원본 {card.sourceRow}행</small><WordEditor dayId={dayId} card={card} onSaved={(updated) => {
+          setData((current) => current ? { ...current, cards: current.cards.map((word) => word.id === updated.id ? { ...word, ...updated } : word) } : current);
+          onSaved(updated);
+        }} /></div>
         <span className={`word-status ${card.status}`}>{card.status === "known" ? "✓ " : ""}{wordStatusLabels[card.status]}</span>
       </li>)}</ol>}
     </>}

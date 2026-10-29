@@ -184,3 +184,14 @@ IANA 시간대와 `HH:mm`을 검증한다. 활성화할 때 유효한 푸시 구
 ## 내부 작업자 엔드포인트
 
 장기 실행 worker가 DB를 직접 읽는 배포에서는 내부 HTTP endpoint가 필요 없다. 서버리스 cron을 택할 때만 `POST /api/internal/notifications/tick`을 추가하고 `Authorization: Bearer <CRON_SECRET>`을 constant-time 비교로 검증한다. 배포 방식이 정해지기 전에는 이 route를 만들지 않는다.
+
+## 단어·뜻 수정
+
+`PATCH /api/days/:dayId/cards/:cardId`
+
+로그인한 사용자 소유 Day의 카드 한 건을 수정한다. 요청은 `{ "term": "apple", "meaning": "사과" }`이며 두 필드 모두 필수다. 추가 필드는 400으로 거절한다. 앞뒤 공백 제거 후 단어 1~200자, 뜻 1~1,000자(기존 업로드와 동일한 문자열 길이 기준)를 허용한다.
+
+성공 응답: `{ "card": { "id": "UUID", "term": "apple", "meaning": "사과" } }`.
+잘못된 UUID·입력은 400, 타인 소유·미존재·Day 불일치는 모두 404다. 기존 인증·Origin 검사를 적용한다.
+
+예문·예문 작업·원본 행·학습 결과는 수정하지 않는다. 동시 수정은 마지막 유효 저장이 남는다. 중복 단어를 허용한다.
