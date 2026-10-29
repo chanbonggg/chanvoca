@@ -582,3 +582,10 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+
+.pronunciation { margin-top: 16px; text-align: center; }
+.pronunciation button { min-width: 44px; min-height: 44px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); cursor: pointer; }
+.pronunciation button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pronunciation button:disabled { opacity: 0.6; cursor: default; }
+.pronunciation p { margin-top: 8px; font-size: 0.85rem; }
+.pronunciation p:empty { display: none; }

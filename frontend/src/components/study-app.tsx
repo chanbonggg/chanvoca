@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { PronunciationButton } from "@/components/pronunciation-button";
 import { NotificationSettings } from "@/components/notification-settings";
 import { api, ApiError, messageFrom } from "@/lib/api";
 import { clientLog, reportError } from "@/lib/client-log";
@@ -368,11 +369,12 @@ export function StudyApp({ onLogout, userId, loginId }: { onLogout: () => void; 
           {phase === "error" && <ErrorCard message={errorMessage} onRetry={() => void loadDays()} />}
           {phase === "complete" && session && <CompleteCard session={session} onRepeat={() => void repeatAll()} />}
           {phase === "studying" && currentCard && (
-            <article className={`word-card study-card ${revealed ? "is-revealed" : ""}`} role="button" tabIndex={revealed ? -1 : 0} aria-label={revealed ? "뜻을 확인했습니다" : "카드를 눌러 뜻 보기"} onClick={reveal} onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); reveal(); }
+            <article className={`word-card study-card ${revealed ? "is-revealed" : ""}`} role={revealed ? undefined : "button"} tabIndex={revealed ? undefined : 0} aria-label={revealed ? "뜻을 확인했습니다" : "카드를 눌러 뜻 보기"} onClick={reveal} onKeyDown={(event) => {
+              if (!revealed && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); reveal(); }
             }}>
               <span className="card-kicker">ROUND {roundNumber} · {cardIndex + 1} / {cards.length}</span>
               <h1 className="term">{currentCard.term}</h1>
+              {revealed && !timedOut && !saving && !menuOpen && !listDayId && <PronunciationButton key={`${session?.id}:${roundNumber}:${cardIndex}:${currentCard.id}`} term={currentCard.term} />}
               {!revealed && <p className="tap-hint">카드를 눌러 뜻을 확인하세요</p>}
               {revealed && <div className="card-back">
                 <p className="meaning">{currentCard.meaning}</p>
