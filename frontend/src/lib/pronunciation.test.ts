@@ -37,3 +37,17 @@ test("errors allow retry and normal completion resets state", () => {
   f.player.play("three"); f.spoken[1].onend?.({} as SpeechSynthesisEvent); assert.deepEqual(f.states.at(-1), [false, ""]);
   f.player.play(" "); assert.equal(f.spoken.length, 2);
 });
+
+test("numbers are excluded from speech while words and pronunciation punctuation remain", () => {
+  const f = fixture();
+  for (const [term, expected] of [["1. apple", "apple"], ["apple 23", "apple"], ["１２) take 2 off", "take off"], ["B2B", "B B"], ["don't", "don't"], ["well-known", "well-known"]]) {
+    f.player.play(term);
+    assert.equal(f.spoken.at(-1)?.text, expected);
+  }
+  const count = f.spoken.length;
+  for (const term of ["123", "１２３", "(1.2)", "①"]) {
+    f.player.play(term);
+    assert.equal(f.spoken.length, count);
+    assert.ok(f.states.at(-1)?.[1]);
+  }
+});
