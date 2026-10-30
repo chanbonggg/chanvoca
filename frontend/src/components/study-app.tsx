@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { WordEditor, type EditedWord } from "@/components/word-editor";
 import { PronunciationButton } from "@/components/pronunciation-button";
+import { InviteFriend } from "@/components/invite-friend";
 import { NotificationSettings } from "@/components/notification-settings";
 import { api, ApiError, messageFrom } from "@/lib/api";
 import { clientLog, reportError } from "@/lib/client-log";
@@ -403,6 +404,7 @@ export function StudyApp({ onLogout, userId, loginId }: { onLogout: () => void; 
           {session && <section className="menu-section"><h3>DAY 전체 단어 확인</h3><div className="day-list">{days.map((day) => <button className="ghost-action" type="button" key={day.id} disabled={saving} onClick={() => setListDayId(day.id)}>Day {day.dayNumber} 전체 단어 보기</button>)}</div></section>}
           <section className="menu-section"><h3>단어 가져오기</h3><label className={`upload-control ${uploading ? "is-uploading" : ""}`}><span>{uploading ? "업로드 중…" : "엑셀 또는 CSV 선택"}</span><small>.xlsx, .xls, .csv</small><input type="file" accept=".xlsx,.xls,.csv" disabled={uploading} onChange={(event) => { void uploadFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><p className="helper-text">헤더가 있으면 첫 행의 word/meaning 또는 단어/뜻을 인식해 제외합니다. 헤더 없이 첫 행부터 단어를 입력해도 됩니다. 빈 행은 건너뛰지만 단어 또는 뜻이 비어 있으면 파일 전체가 저장되지 않고 오류 행을 알려드립니다. CSV는 UTF-8만 지원합니다.</p>{uploadMessage && <p className="upload-message" role="alert">{uploadMessage}</p>}</section>
           <NotificationSettings />
+          <InviteFriend />
           <section className="menu-section"><button className="ghost-action" type="button" onClick={onLogout}>{loginId} · 로그아웃</button></section>
         </aside>
       </div>}

@@ -150,4 +150,6 @@ test("protected API expiry requests authentication but a wrong login does not", 
   assert.equal(notifications, 1);
   await assert.rejects(api("/api/auth/login", { method: "POST", body: "{}" }), ApiError);
   assert.equal(notifications, 1);
+  await assert.rejects(api("/api/auth/invites", { method: "POST" }), ApiError);
+  assert.equal(notifications, 2);
 });

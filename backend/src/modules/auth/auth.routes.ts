@@ -1,8 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../../shared/db.js";
-import { consumeRateLimit, hashPassword, issueSession, loginId, missingPasswordHash, passwordMatches, revokeSession, sessionCookie, sessionToken, tokenHash, validPassword, type AuthConfig } from "./auth.js";
+import { createInvite, requestUser, consumeRateLimit, hashPassword, issueSession, loginId, missingPasswordHash, passwordMatches, revokeSession, sessionCookie, sessionToken, tokenHash, validPassword, type AuthConfig } from "./auth.js";
 
 export async function registerAuthRoutes(app: FastifyInstance, sql: Database | undefined, config: AuthConfig) {
+  app.post("/auth/invites", async (request, reply) => {
+    const user = requestUser(request);
+    if (!sql) return reply.code(503).send(error("AUTH_UNAVAILABLE", "인증 저장소를 사용할 수 없습니다."));
+    const retry = await consumeRateLimit(sql, `invite:user:${user.id}`, 10, 3600);
+    if (retry) return reply.header("retry-after", retry).code(429).send(error("AUTH_RATE_LIMIT", "초대코드는 시간당 10개까지 만들 수 있습니다. 잠시 후 다시 시도하세요."));
+    return reply.code(201).send({ inviteCode: await createInvite(sql) });
+  });
   app.get("/auth/session", async (request) => ({ authenticated: Boolean(request.user), user: request.user ? { id: request.user.id, loginId: request.user.loginId } : null }));
   for (const mode of ["login", "register"] as const) {
     app.post<{ Body: { loginId?: unknown; password?: unknown; inviteCode?: unknown } }>(`/auth/${mode}`, { bodyLimit: 4096 }, async (request, reply) => {

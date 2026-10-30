@@ -14,6 +14,43 @@ import { processPushJob } from "../notifications/notifications.worker.js";
 import webpush from "web-push";
 
 const databaseUrl = testDatabaseUrl();
+test("web invites require authentication, enforce per-user limits and allow one signup", { timeout: 30000 }, async () => {
+  const sql = createDatabase(databaseUrl);
+  await applyMigrations(sql);
+  const app = buildApp(sql, undefined, testConfig);
+  try {
+    const [user] = await sql<{ id: string }[]>`INSERT INTO users (display_name) VALUES ('inviter') RETURNING id`;
+    const cookie = "chanvoca_session=" + await issueSession(sql, user.id);
+    await sql`INSERT INTO auth_credentials (user_id, login_id, password_hash) VALUES (${user.id}, 'inviter', ${await testHash()})`;
+    const issue = (headers: Record<string, string> = { cookie, origin: testConfig.origin }) => app.inject({ method: "POST", url: "/api/auth/invites", headers });
+    assert.equal((await issue({ origin: testConfig.origin })).statusCode, 401);
+    assert.equal((await issue({ cookie, origin: "https://evil.test" })).statusCode, 403);
+    const response = await issue();
+    assert.equal(response.statusCode, 201, response.body);
+    assert.equal(response.headers["cache-control"], "no-store");
+    const code = response.json().inviteCode;
+    assert.match(code, /^[\w-]{43}$/);
+    const [stored] = await sql`SELECT * FROM auth_invites WHERE token_hash = ${tokenHash(code)}`;
+    assert.ok(stored);
+    assert.ok(!JSON.stringify(stored).includes(code));
+    assert.ok(Math.abs(new Date(stored.expires_at).getTime() - Date.now() - 7 * 86400000) < 10000);
+    const register = (inviteCode: string, loginId: string) => app.inject({ method: "POST", url: "/api/auth/register", headers: { origin: testConfig.origin }, payload: { inviteCode, loginId, password: testPassword } });
+    const registered = await register(code, "invited_friend");
+    assert.equal(registered.statusCode, 201, registered.body);
+    assert.equal((await register(code, "second_friend")).json().error.code, "INVITE_INVALID");
+    const expired = (await issue()).json().inviteCode;
+    await sql`UPDATE auth_invites SET expires_at = now() - interval '1 second' WHERE token_hash = ${tokenHash(expired)}`;
+    assert.equal((await register(expired, "expired_friend")).json().error.code, "INVITE_INVALID");
+    const attempts = await Promise.all(Array.from({ length: 10 }, () => issue()));
+    assert.equal(attempts.filter((r) => r.statusCode === 201).length, 8);
+    const limited = attempts.filter((r) => r.statusCode === 429);
+    assert.equal(limited.length, 2);
+    assert.ok(Number(limited[0].headers["retry-after"]) > 0);
+    const friendCookie = String(registered.headers["set-cookie"]).split(";")[0];
+    assert.equal((await issue({ cookie: friendCookie, origin: testConfig.origin })).statusCode, 201);
+  } finally { await app.close(); }
+});
+
 test("DB-01/02/03: migration and owner setup preserve legacy data and reject repeated setup", { timeout: 30000 }, async () => {
   const sql = createDatabase(databaseUrl);
   try {
