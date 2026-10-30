@@ -10,7 +10,7 @@ export function routeName(path: string) {
   if (/^\/api\/study\/sessions\/[^/]+(?:\/(attempts|rounds))?$/.test(clean)) {
     return clean.replace(/(\/sessions\/)[^/]+/, "$1:sessionId");
   }
-  return ["/", "/api/auth/login", "/api/auth/register", "/api/auth/logout", "/api/auth/session", "/api/days", "/api/days/", "/api/days/upload", "/api/study/sessions", "/api/push/config", "/api/push/subscriptions", "/api/push/test", "/api/notification-settings", "/api/health", "/api/ready"].includes(clean) ? clean : "unmatched";
+  return ["/", "/api/auth/login", "/api/auth/register", "/api/auth/logout", "/api/auth/session", "/api/auth/invites", "/api/days", "/api/days/", "/api/days/upload", "/api/study/sessions", "/api/push/config", "/api/push/subscriptions", "/api/push/test", "/api/notification-settings", "/api/health", "/api/ready"].includes(clean) ? clean : "unmatched";
 }
 
 // Project only diagnostic fields; never serialize arbitrary errors, bodies or headers.

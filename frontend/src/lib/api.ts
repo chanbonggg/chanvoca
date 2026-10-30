@@ -34,7 +34,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const data = response.status === 204 ? null : await response.json().catch(() => null) as { error?: { message?: string; code?: string; rows?: number[] }; message?: string } | null;
     if (generation !== authGeneration) throw new DOMException("Account changed", "AbortError");
     if (!response.ok) {
-      if ((response.status === 401 || data?.error?.code === "AUTH_CHANGED") && !path.startsWith("/api/auth/")) window.dispatchEvent(new Event("chanvoca:auth-required"));
+      if ((response.status === 401 || data?.error?.code === "AUTH_CHANGED") && (!path.startsWith("/api/auth/") || path === "/api/auth/invites")) window.dispatchEvent(new Event("chanvoca:auth-required"));
       const rowText = data?.error?.rows?.length ? ` (오류 행: ${data.error.rows.join(", ")})` : "";
       throw new ApiError(`${data?.error?.message ?? "서버 요청에 실패했습니다."}${rowText}`, response.status,
         data?.error?.code ?? `HTTP_${response.status}`, clientRequestId, frontendRequestId, backendRequestId);
