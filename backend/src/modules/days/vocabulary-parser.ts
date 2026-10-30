@@ -1,3 +1,4 @@
+import { validVocabulary } from "./vocabulary.js";
 import * as XLSX from "xlsx";
 import { currentLog, setStage } from "../../shared/logger.js";
 
@@ -12,8 +13,6 @@ export type VocabularyParseResult =
   | { ok: false; code: string; message: string; rows?: number[] };
 
 const maxRows = 5_000;
-const maxTermLength = 200;
-const maxMeaningLength = 1_000;
 
 export function parseVocabularyFile(filename: string, content: Buffer): VocabularyParseResult {
   setStage("vocabulary.parse_file");
@@ -54,7 +53,7 @@ export function parseVocabularyFile(filename: string, content: Buffer): Vocabula
     const meaning = cellText(row[1]);
 
     if (!term && !meaning) return;
-    if (!term || !meaning || term.length > maxTermLength || meaning.length > maxMeaningLength) {
+    if (!validVocabulary(term, meaning)) {
       invalidRows.push(sourceRow);
       return;
     }

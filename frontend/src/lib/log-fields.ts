@@ -6,6 +6,7 @@ const uuid = /^[a-f0-9-]{36}$/i;
 
 export function routeName(path: string) {
   const clean = path.split(/[?#]/)[0];
+  if (/^\/api\/days\/[^/]+\/cards\/[^/]+$/.test(clean)) return "/api/days/:dayId/cards/:cardId";
   if (/^\/api\/study\/sessions\/[^/]+(?:\/(attempts|rounds))?$/.test(clean)) {
     return clean.replace(/(\/sessions\/)[^/]+/, "$1:sessionId");
   }
